@@ -136,7 +136,7 @@ export function PlayerBar() {
           </button>
         </div>
 
-        <div className="flex flex-1 items-center justify-end gap-4">
+        <div className="flex flex-1 items-center justify-end gap-6">
           <button
             className={ICON_BTN}
             aria-label="Full-screen lyrics"

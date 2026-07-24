@@ -14,7 +14,14 @@
         { "url": "https://yt3.ggpht.com/*" },
         { "url": "https://yt3.googleusercontent.com/*" },
         { "url": "https://lh3.googleusercontent.com/*" },
-        { "url": "https://lrclib.net/*" }
+        { "url": "https://lrclib.net/*" },
+        { "url": "http://mobilecdn.kugou.com/*" },
+        { "url": "http://krcs.kugou.com/*" },
+        { "url": "http://lyrics.kugou.com/*" },
+        { "url": "https://music.163.com/*" },
+        { "url": "https://apic-desktop.musixmatch.com/*" },
+        { "url": "https://c.y.qq.com/*" },
+        { "url": "https://genius.com/*" }
       ]
     }
   ]

@@ -91,11 +91,17 @@ What's real:
 - `Home` / `Explore` (4 sub-feeds) / `Search` (all + per-type filters, top-result
   hero) / `Playlist` / `Album` / `Artist`, all cache-first and non-blocking on
   failure (an error card + Retry, never a frozen spinner or a blank screen).
-- Lyrics: `fetchBestLyrics` races YTM's own lyrics against LRCLIB and picks the best
-  (timed beats plain); the karaoke stage scrolls and highlights the active line with
-  the same easing/timing engine as YTMLite, opened via the player bar's lyrics/
-  full-screen buttons or the `L` shortcut.
+- Lyrics: all 7 of YTMLite's sources (YouTube Music, LRCLIB, Kugou, NetEase,
+  Musixmatch, QQ Music, Genius — `src/lib/lyrics/`), same auto-pick preference order
+  and "timed beats plain" rule as YTMLite. No manual source-picker dropdown yet
+  (`fetchAllLyrics` exposes the per-source map for one, ready to build); the karaoke
+  stage scrolls and highlights the active line with the same easing/timing engine as
+  YTMLite, opened via the player bar's lyrics/full-screen buttons or the `L` shortcut.
 - A queue panel (now playing / up next, jump-to, remove) anchored to the player bar.
+- A "like" heart on the karaoke stage — local-only (`likedSongsStore`, persisted to
+  localStorage), not synced to a real YouTube Music account: liking a track for real
+  needs the same signed-in cookie session accounts/sign-in is waiting on. Disclosed in
+  the button's own doc comment rather than silently faking a synced like.
 
 What's deliberately cut for tonight's deadline (all disclosed in-line where they'd
 otherwise be expected):
@@ -146,7 +152,8 @@ src/                    view plane
   lib/network.ts        the JS-routed "network subsystem" (home/explore/search/
                          playlist/album/artist/lyrics) — see its doc comment
   lib/innertube/        InnerTube client + parsers (ported from YTMLite)
-  lib/lyrics/           LRC parsing + YTM/LRCLIB sources + best-source aggregator
+  lib/lyrics/           LRC parsing + 7 sources (YTM/LRCLIB/Kugou/NetEase/
+                         Musixmatch/QQ/Genius) + best-source aggregator
   bus/                  transport (tauri | mock) + rAF-batched event pump (both buses)
   store/                one store per domain: app (route/online), playback, home,
                          explore, search, playlist, album, artist, lyrics, karaoke,
