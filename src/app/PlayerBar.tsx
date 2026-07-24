@@ -83,7 +83,12 @@ export function PlayerBar() {
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-6">
+        {/* One flex group, one gap, for every button from Shuffle through
+            the volume slider — previously this was two separate flex-1
+            groups (transport centered, utility right-justified), which
+            left a much wider gap between Repeat and the fullscreen-lyrics
+            button than between any other pair. */}
+        <div className="flex flex-1 items-center justify-end gap-6">
           <button
             className={cn(ICON_BTN, shuffle && "text-brand")}
             aria-label="Shuffle"
@@ -134,9 +139,6 @@ export function PlayerBar() {
               <RepeatIcon className="size-5" />
             )}
           </button>
-        </div>
-
-        <div className="flex flex-1 items-center justify-end gap-6">
           <button
             className={ICON_BTN}
             aria-label="Full-screen lyrics"
