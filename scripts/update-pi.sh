@@ -14,8 +14,7 @@
 
 set -euo pipefail
 
-# TODO: fill in once the GitHub repo exists, e.g. "xiabo-lab/kodama-lite".
-REPO="REPLACE_ME/kodama-lite"
+REPO="xiabo-lab/Kodama-Lite"
 # The .deb package name Tauri derives from productName by kebab-casing it.
 # "Kodama-Lite" -> "kodama-lite". If productName ever changes, this must
 # change with it or the script will think the app is not installed and
