@@ -8,8 +8,33 @@ mod protocol;
 mod subsystems;
 mod ytdlp;
 
+/// Linux-only environment fixup that must run before GTK/WebKit is
+/// initialized — i.e. the very first statement of `run()`, before the
+/// builder exists.
+///
+/// WebKitGTK's DMABUF renderer negotiates a buffer format the Pi 5's V3D
+/// driver/compositor combination can't present correctly — confirmed on
+/// device as corrupted/garbled window content (YTMLite hit the same root
+/// cause as a blank white window instead; the visual symptom depends on
+/// what's being composited, not the underlying cause). Disabling it falls
+/// back to a compatible path that still uses the GPU for compositing.
+/// Only fills in the variable if the user hasn't already set it, so an
+/// explicit `WEBKIT_DISABLE_DMABUF_RENDERER=0` in the environment still
+/// wins. Ported from YTMLite's `platform.rs::init_env()`.
+fn init_env() {
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            // SAFETY: single-threaded here — this runs before any window,
+            // plugin, or async runtime exists.
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_env();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
