@@ -1,0 +1,170 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+/* The Pi's 1920x440 bar panel. Anything under this height switches to the
+   side-by-side layouts (carried over from YTMLite). */
+@custom-variant short (@media (max-height: 560px));
+
+/*
+ * Design tokens ported from YTMLite so the UI is pixel-identical. Only the
+ * dark theme is defined here for Phase 1 (the in-car display is always dark);
+ * the light theme is added when the Settings screen is ported.
+ */
+:root {
+  --titlebar-h: 60px;
+
+  /* YouTube brand red */
+  --brand: #fa1f3e;
+  --brand-foreground: oklch(0.985 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --primary: var(--brand);
+  --primary-foreground: var(--brand-foreground);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(1 0 0 / 10%);
+  --accent-foreground: oklch(0.985 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --ring: var(--brand);
+
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+
+  /* Translucent floating surfaces over the app background. */
+  --surface: oklch(0 0 0 / 30%);
+  --surface-active: oklch(0 0 0 / 60%);
+  --hairline: oklch(1 0 0 / 10%);
+}
+
+@theme inline {
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-surface: var(--surface);
+  --color-surface-active: var(--surface-active);
+  --color-hairline: var(--hairline);
+  --radius-lg: 0.625rem;
+  --radius-md: 0.5rem;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    background: var(--background);
+    color: var(--foreground);
+    font-family:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
+      Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+    overscroll-behavior: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    overflow: hidden;
+    margin: 0;
+  }
+
+  .shelf-scroll,
+  .app-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .shelf-scroll::-webkit-scrollbar,
+  .app-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .shelf-scroll::-webkit-scrollbar-track,
+  .app-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .shelf-scroll::-webkit-scrollbar-thumb,
+  .app-scroll::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 9999px;
+  }
+  .shelf-scroll::-webkit-scrollbar-thumb:hover,
+  .app-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
+  }
+}
+
+@layer utilities {
+  /* Soft fade at the left/right edges of a horizontal carousel so covers
+     don't get clipped with a hard edge — toggled by `--fade-l`/`--fade-r`
+     (set inline by the carousel based on scrollLeft). */
+  .shelf-edge-fade {
+    --fade-l: 1;
+    --fade-r: 1;
+    mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, var(--fade-l)) 0,
+      black 56px,
+      black calc(100% - 56px),
+      rgba(0, 0, 0, var(--fade-r)) 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, var(--fade-l)) 0,
+      black 56px,
+      black calc(100% - 56px),
+      rgba(0, 0, 0, var(--fade-r)) 100%
+    );
+  }
+
+  /* Top/bottom fade for the lyrics column — applied only once the
+     karaoke has progressed past the first line. */
+  .lyrics-mask {
+    mask-image: linear-gradient(to bottom, transparent 0%, black 14%, black 86%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 14%, black 86%, transparent 100%);
+  }
+
+  .lyrics-no-scrollbar {
+    scrollbar-width: none;
+  }
+  .lyrics-no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Keeps every lyric line on its own GPU layer so Chromium doesn't
+     re-rasterize text at the start/end of the scale transition. */
+  .lyrics-line {
+    transform: translateZ(0);
+    will-change: scale;
+    backface-visibility: hidden;
+  }
+
+  /* Top-of-column blur strip for the inline lyrics panel — see
+     lyrics-view.tsx for why it's skipped on the full-screen stage. */
+  .lyrics-blur-overlay {
+    backdrop-filter: blur(1.5px);
+    -webkit-backdrop-filter: blur(1.5px);
+    mask-image: linear-gradient(to bottom, black 0%, black 20%, transparent 80%);
+    -webkit-mask-image: linear-gradient(to bottom, black 0%, black 20%, transparent 80%);
+  }
+}

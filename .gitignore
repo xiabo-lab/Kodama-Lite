@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+dist-ssr/
+
+# rust / tauri
+src-tauri/target/
+src-tauri/gen/
+
+# reference project (Kodama/AGPLv3, ~50MB) is read-only design material kept
+# on disk next to the code for local reference — not part of this app and
+# not something to publish under this repo's history.
+Reference Project/
+
+# editor / OS
+.DS_Store
+*.local
+.vscode/*
+!.vscode/extensions.json

@@ -1,0 +1,65 @@
+[package]
+name = "kodama-lite"
+version = "0.1.0"
+description = "Kodama-Lite — a fluid, decoupled YouTube Music client for the Raspberry Pi 5"
+authors = ["xiabo-lab"]
+license = "GPL-3.0-only"
+edition = "2021"
+rust-version = "1.77"
+
+# The `_lib` suffix keeps the lib name distinct from the bin name (a Windows
+# cargo quirk — see rust-lang/cargo#8519).
+[lib]
+name = "kodama_lite_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+# InnerTube (library/search/playlist/album/artist) and lyrics (LRCLIB,
+# YouTube Music) both run as a JS-side "network subsystem" — see
+# src/lib/network.ts — using this plugin's `fetch`, not a Rust reqwest
+# client. It's the same call the request needs either way (a plain
+# HTTPS POST/GET with a JSON body), and doing it in Rust would mean
+# reimplementing YTMLite's ~3,000 lines of proven response-parsing logic
+# uncompiled and unverified (there is no Rust toolchain in this dev
+# environment). The plugin still keeps the fetch off the render path —
+# it's a real async network call, never awaited by a component — and
+# its reach is capability-scoped (capabilities/default.json), bypassing
+# the page CSP entirely rather than needing it loosened.
+tauri-plugin-http = { version = "2", default-features = false, features = [
+    # Ported `shared.ts` sets Origin/Referer/X-Origin by hand (InnerTube
+    # expects the real music.youtube.com values, not whatever a plain
+    # fetch would send) — the fetch spec normally forbids scripts from
+    # setting these, so the plugin needs this feature to allow it.
+    "unsafe-headers",
+    "rustls-tls",
+    "http2",
+    "charset",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "net",
+    "time",
+    "fs",
+    "io-util",
+    "process",
+    "sync",
+] }
+# The local streaming server (playback subsystem): a tiny axum service on
+# 127.0.0.1 that serves cached/downloading audio with Range support.
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+# Only used to fetch the managed yt-dlp binary (ytdlp.rs) in Phase 2;
+# Phase 3's network subsystem (InnerTube) will reuse this.
+reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
+
+[features]
+# Tauri mobile entry point (unused on the Pi target, kept for parity).
+custom-protocol = ["tauri/custom-protocol"]

@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core permissions: invoke app commands, listen to bus events, open external links, and the scoped outbound hosts the JS-side network/lyrics subsystem is allowed to reach.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://music.youtube.com/*" },
+        { "url": "https://i.ytimg.com/*" },
+        { "url": "https://yt3.ggpht.com/*" },
+        { "url": "https://yt3.googleusercontent.com/*" },
+        { "url": "https://lh3.googleusercontent.com/*" },
+        { "url": "https://lrclib.net/*" }
+      ]
+    }
+  ]
+}

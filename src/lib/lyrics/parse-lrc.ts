@@ -1,0 +1,55 @@
+// Ported verbatim from YTMLite.
+
+import type { TimedLine } from "@/lib/lyrics/types";
+
+/**
+ * Parse LRC text into timed lines.
+ *
+ * Format examples:
+ *   [00:12.34]First line
+ *   [00:15.67]Second line
+ *   [00:15.67][00:20.00]Repeated line (chorus)
+ *   [00:12]Line without centiseconds
+ *
+ * Lines without timestamps (metadata like `[ar:Artist]`) are skipped.
+ * Each line's `end` is filled from the next line's `start` so the
+ * highlight glides naturally between lines.
+ *
+ * Enhanced ("karaoke") LRC additionally carries a per-word timestamp
+ * inside the text, e.g. `[00:12.34]<00:12.34>Hel<00:12.80>lo`. We
+ * highlight whole lines rather than words, so the word tags are stripped
+ * out; without this they would render literally in the lyric text.
+ */
+export function parseLRC(lrc: string): TimedLine[] {
+  const tsRe = /\[(\d+):(\d+)(?:[.:](\d+))?\]/g;
+  const wordTsRe = /<\d+:\d+(?:[.:]\d+)?>/g;
+  const out: TimedLine[] = [];
+  // Optional global shift tag. Per the LRC spec a positive [offset:+ms]
+  // shifts the lyrics earlier, so we subtract it from every timestamp.
+  const offsetMatch = lrc.match(/\[offset:\s*([+-]?\d+)\s*\]/i);
+  const offsetSec = offsetMatch ? parseInt(offsetMatch[1], 10) / 1000 : 0;
+  for (const rawLine of lrc.split(/\r?\n/)) {
+    const matches = [...rawLine.matchAll(tsRe)];
+    if (matches.length === 0) continue;
+    const last = matches[matches.length - 1];
+    const text = rawLine
+      .slice((last.index ?? 0) + last[0].length)
+      .replace(wordTsRe, "")
+      .trim();
+    for (const m of matches) {
+      const mm = parseInt(m[1], 10);
+      const ss = parseInt(m[2], 10);
+      const frac = m[3]
+        ? parseInt(m[3].padEnd(3, "0").slice(0, 3), 10)
+        : 0;
+      if (Number.isNaN(mm) || Number.isNaN(ss)) continue;
+      const start = Math.max(0, mm * 60 + ss + frac / 1000 - offsetSec);
+      out.push({ start, text });
+    }
+  }
+  out.sort((a, b) => a.start - b.start);
+  for (let i = 0; i < out.length - 1; i++) {
+    out[i].end = out[i + 1].start;
+  }
+  return out;
+}
