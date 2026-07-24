@@ -1,0 +1,51 @@
+# Builds the Raspberry Pi (arm64) .deb, then publishes it to a draft GitHub
+# Release whenever a `v*` tag is pushed:
+#   git tag v0.1.0 && git push origin v0.1.0
+# → wait for this workflow → review the draft on the Releases page → publish.
+#
+# Kodama-Lite is a Pi-only app, so there is no Windows leg — only the arm64
+# .deb. Ported from YTMLite's release workflow; no updater signing keys yet
+# (Kodama-Lite has no updater plugin configured), so this only produces the
+# installable .deb, not a self-updating one.
+#
+# The arm64 leg runs on ubuntu-24.04-arm — GitHub's free hosted ARM runner
+# for public repositories. It builds natively, so no cross-compilation or
+# QEMU is involved. Its apt list is kept in step with ci.yml's rust job.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: raspberry-pi-arm64
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            librsvg2-dev libssl-dev patchelf
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Kodama-Lite ${{ github.ref_name }}"
+          releaseBody: "See the assets below to download and install this version."
+          releaseDraft: true
+          prerelease: false

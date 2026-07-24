@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build
+        run: npx vite build
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Test
+        run: npx vitest run
+
+  rust:
+    # Kodama-Lite is Pi-only, so this keeps the Linux/arm64 build honest —
+    # there's no Windows leg and no Rust toolchain in the dev environment
+    # this project was authored in, so this job is the first real compile
+    # check the Rust side gets.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            librsvg2-dev libssl-dev patchelf
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: cargo test
+        run: cargo test --lib --manifest-path src-tauri/Cargo.toml
