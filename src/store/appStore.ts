@@ -13,6 +13,7 @@ export type Route =
   | { kind: "explore" }
   | { kind: "search" }
   | { kind: "library" }
+  | { kind: "settings" }
   | { kind: "playlist"; id: string }
   | { kind: "album"; id: string }
   | { kind: "artist"; id: string };

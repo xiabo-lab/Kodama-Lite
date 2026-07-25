@@ -15,6 +15,17 @@ import { fetchPlaylistFirstPage, fetchPlaylistContinuation } from "@/lib/innertu
 import { fetchAlbum } from "@/lib/innertube/album";
 import { fetchArtist } from "@/lib/innertube/artist";
 import { fetchAllLyrics, type LyricsSource } from "@/lib/lyrics/sources";
+import {
+  fetchLibraryAlbums,
+  fetchLibraryArtists,
+  fetchLibraryPlaylists,
+  fetchLikedSongs,
+  type LibrarySection,
+} from "@/lib/innertube/library";
+import { hasSession } from "@/lib/innertube/shared";
+
+/** The Library screen's four tabs. */
+export type LibraryTab = "playlists" | "songs" | "albums" | "artists";
 
 /**
  * The "network subsystem" — everything that talks to YouTube Music
@@ -49,6 +60,7 @@ export type ContentCommand =
   | { type: "playlist:more"; id: string; token: string }
   | { type: "album:load"; id: string }
   | { type: "artist:load"; id: string }
+  | { type: "library:load"; tab: LibraryTab }
   | {
       type: "lyrics:load";
       videoId: string;
@@ -81,6 +93,17 @@ export type ContentEvent =
   | { type: "album:loading"; id: string }
   | { type: "album:loaded"; id: string; page: AlbumPage }
   | { type: "album:error"; id: string; message: string }
+  | { type: "library:loading"; tab: LibraryTab }
+  /** `sections` for the shelf tabs, `tracks` for Liked Songs — one of the
+   *  two is always empty, which is simpler than two event types for what
+   *  is one screen with one loading state. */
+  | {
+      type: "library:loaded";
+      tab: LibraryTab;
+      sections: LibrarySection[];
+      tracks: ShelfItem[];
+    }
+  | { type: "library:error"; tab: LibraryTab; message: string }
   | { type: "artist:loading"; id: string }
   | { type: "artist:loaded"; id: string; page: ArtistPage }
   | { type: "artist:error"; id: string; message: string }
@@ -232,6 +255,41 @@ async function handle(command: ContentCommand): Promise<void> {
         publish({ type: "artist:loaded", id: command.id, page });
       } catch (e) {
         publish({ type: "artist:error", id: command.id, message: errMessage(e) });
+      }
+      return;
+    }
+
+    case "library:load": {
+      const { tab } = command;
+      publish({ type: "library:loading", tab });
+      // Signed out, YouTube answers a library browseId with a generic
+      // explore page instead of an error — it parses cleanly into shelves
+      // that have nothing to do with the user. Refusing here is what
+      // stops "your playlists" quietly showing someone else's.
+      if (!hasSession()) {
+        publish({
+          type: "library:error",
+          tab,
+          message: "Sign in to see your library.",
+        });
+        return;
+      }
+      try {
+        if (tab === "songs") {
+          const tracks = await fetchLikedSongs();
+          publish({ type: "library:loaded", tab, sections: [], tracks });
+        } else {
+          const fetcher =
+            tab === "playlists"
+              ? fetchLibraryPlaylists
+              : tab === "albums"
+                ? fetchLibraryAlbums
+                : fetchLibraryArtists;
+          const sections = await fetcher();
+          publish({ type: "library:loaded", tab, sections, tracks: [] });
+        }
+      } catch (e) {
+        publish({ type: "library:error", tab, message: errMessage(e) });
       }
       return;
     }

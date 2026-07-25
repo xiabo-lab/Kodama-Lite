@@ -58,6 +58,11 @@ interface PlaybackState {
   /** Drop everything after the current track. */
   clearQueue: () => void;
   toggle: () => void;
+  /** Start the current track, resolving its stream first if it hasn't
+   *  been. Needed because a queue restored from the last session has a
+   *  track and an index but no `streamUrl` — only `loadTrackAt` fires a
+   *  resolve, and nothing calls it on rehydrate. */
+  resume: () => void;
   next: () => void;
   prev: () => void;
   seek: (seconds: number) => void;
@@ -186,7 +191,27 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
       saveQueueCache(nextQueue, index);
     },
 
-    toggle: () => set((s) => ({ playing: s.index >= 0 ? !s.playing : false })),
+    // Pausing is a pure flag flip; starting goes through `resume` so the
+    // restored-queue case resolves a stream instead of setting
+    // `playing: true` against a `<audio>` element with no src — which is
+    // what the play button did after a relaunch.
+    toggle: () => {
+      const { index, playing } = get();
+      if (index < 0) return set({ playing: false });
+      if (playing) return set({ playing: false });
+      get().resume();
+    },
+
+    resume: () => {
+      const { queue, index, streamUrl } = get();
+      if (index < 0 || index >= queue.length) return;
+      if (!streamUrl) {
+        set({ status: "loading", error: undefined });
+        requestStream(queue[index].videoId);
+        prefetchNext(queue, index);
+      }
+      set({ playing: true });
+    },
 
     next: () => {
       const { queue, index, repeat } = get();

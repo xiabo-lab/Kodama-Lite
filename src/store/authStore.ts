@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { dispatch } from "@/bus/bus";
 import { dispatchContent } from "@/lib/network";
+import { useLibraryStore } from "@/store/libraryStore";
 import type { AppEvent } from "@/protocol";
 import { resetAuthCache, setSession } from "@/lib/innertube/shared";
 import { fetchAccount, type Account } from "@/lib/innertube/account";
@@ -52,6 +53,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     // `Cookie` header of an account the user has just signed out of.
     sessionEpoch++;
     resetAuthCache();
+    useLibraryStore.getState().reset();
     set({ status: "signed-out", account: null, error: null });
     dispatch({ type: "auth:signOut" });
     dispatchContent({ type: "home:load" });
@@ -62,6 +64,10 @@ export const useAuthStore = create<AuthState>((set) => ({
       if (e.type === "auth:state") {
         const epoch = ++sessionEpoch;
         const wasSignedIn = useAuthStore.getState().status === "signed-in";
+        // Library content is per-account and never persisted — drop it on
+        // any session change so one account's playlists can't paint under
+        // another's name.
+        useLibraryStore.getState().reset();
         if (e.signedIn && e.cookie && e.sapisid) {
           setSession({ cookie: e.cookie, sapisid: e.sapisid });
           set({ status: "signed-in", account: null, error: null });

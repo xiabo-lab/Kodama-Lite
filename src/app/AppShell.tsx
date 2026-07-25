@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { useDragScroll } from "@/hooks/useDragScroll";
 import { Sidebar } from "@/app/Sidebar";
 import { TopBar } from "@/app/TopBar";
 import { PlayerBar } from "@/app/PlayerBar";
@@ -8,6 +9,7 @@ import { Home } from "@/screens/Home";
 import { Explore } from "@/screens/Explore";
 import { Search } from "@/screens/Search";
 import { Library } from "@/screens/Library";
+import { Settings } from "@/screens/Settings";
 import { Playlist } from "@/screens/Playlist";
 import { Album } from "@/screens/Album";
 import { Artist } from "@/screens/Artist";
@@ -15,6 +17,7 @@ import { useAppStore, type Route } from "@/store/appStore";
 import { cn } from "@/lib/utils";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
+import { useSettingsStore } from "@/store/settingsStore";
 
 function isTypingTarget(el: EventTarget | null): boolean {
   const node = el as HTMLElement | null;
@@ -36,6 +39,16 @@ function isTypingTarget(el: EventTarget | null): boolean {
 export function AppShell() {
   const route = useAppStore((s) => s.route);
   const karaokeOpen = useKaraokeStore((s) => s.open);
+  const scrollRef = useRef<HTMLElement | null>(null);
+  useDragScroll(scrollRef);
+
+  // Theme lives on <html> as the `dark` class (index.html ships it set, so
+  // a cold boot on the in-car display never flashes white before React
+  // hydrates). This is the one place that syncs it to the setting.
+  const theme = useSettingsStore((s) => s.theme);
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+  }, [theme]);
 
   // `L` opens the full-screen karaoke lyrics view — same shortcut as
   // YTMLite. Ignored while typing (e.g. the Search box) so the letter
@@ -68,12 +81,25 @@ export function AppShell() {
           `display: contents` so this wrapper adds no box of its own and the
           three children keep participating in the parent's flex column. */}
       <div className={cn("contents", karaokeOpen && "pointer-events-none")} inert={karaokeOpen}>
-        <TopBar />
+        {/* The sidebar is a full-height column beside the title bar, not
+            below it. Previously the 60px title bar spanned the window and
+            pushed the nav down with it, wasting a seventh of a 440px
+            panel on empty rail. The nav cluster now centres over the
+            content column it actually navigates. */}
         <div className="flex min-h-0 flex-1">
           <Sidebar />
-          <main className="app-scroll min-h-0 min-w-0 flex-1 overflow-y-auto">
-            <Screen route={route} />
-          </main>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <TopBar />
+            {/* One scroller for every screen, so drag-to-scroll is wired
+                once here rather than per-screen — Home, Explore, Search,
+                Library and the entity pages all render into it. */}
+            <main
+              ref={scrollRef}
+              className="app-scroll min-h-0 min-w-0 flex-1 overflow-y-auto"
+            >
+              <Screen route={route} />
+            </main>
+          </div>
         </div>
         <PlayerBar />
       </div>
@@ -92,6 +118,8 @@ function Screen({ route }: { route: Route }) {
       return <Search />;
     case "library":
       return <Library />;
+    case "settings":
+      return <Settings />;
     case "playlist":
       return <Playlist id={route.id} />;
     case "album":

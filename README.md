@@ -118,10 +118,28 @@ What's real:
   to do it for real; the *write* endpoint (`like/like`) hasn't been ported. Disclosed
   in the button's own doc comment rather than silently faking a synced like.
 
+- **Library** — Playlists / Songs / Albums / Artists over the authenticated browse
+  IDs (`FEmusic_liked_playlists`, `FEmusic_liked_albums`,
+  `FEmusic_library_corpus_artists`) plus Liked Songs (`LM`), ported from YTMLite's
+  `routes/library.tsx`. Signed out it refuses to fetch rather than showing what
+  YouTube returns for a library browseId without a session — a generic explore page
+  that parses cleanly into shelves belonging to nobody.
+- **Settings** (`screens/Settings.tsx`) — account, theme (light/dark), resume-on-
+  startup, and the ±3s lyrics offset that compensates for Bluetooth latency to the
+  car speakers. A route rather than YTMLite's modal: a tab-railed dialog on a
+  440px-tall panel leaves no room for the panel.
+- **Touch** — one-finger drag-to-scroll with an inertial glide
+  (`hooks/useDragScroll.ts`, ported from YTMLite), because this webview never
+  dispatches DOM touch events for the Pi's panel and reports pointer events instead;
+  text selection is off app-wide, since dragging the page used to highlight a track
+  title instead of scrolling.
+
 What's deliberately cut (all disclosed in-line where they'd otherwise be expected):
-- **The library's own fetchers.** Sign-in works, but the parsers for
-  `FEmusic_liked_playlists` / `FEmusic_liked_videos` aren't ported, so `Library` is
-  still a stub screen — now one that says which of the two reasons applies.
+- **The Storage settings tab.** YTMLite's is a full cache manager over seven Rust
+  commands (`list_cache`, `get_cache_dir`, `set_cache_dir`, `pick_cache_folder`,
+  `delete_cache_entries`, `cover_cache_stats`, `clear_cover_cache`) that this
+  playback subsystem doesn't expose. The section says so rather than shipping a
+  folder picker that picks nothing.
 - **Playlist/album/artist headers** render as a plain inline block instead of
   YTMLite's title-bar-integrated hero header — same data, simpler placement (see
   `components/shared/entity-header.tsx`).

@@ -5,6 +5,7 @@ import {
   Loader2Icon,
   LogInIcon,
   SearchIcon,
+  SettingsIcon,
   UserRoundIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -80,11 +81,30 @@ export function Sidebar() {
         </button>
       ))}
 
+      {/* Settings sits below the nav rather than inside it: it isn't
+          somewhere you "browse" to, and grouping it with the account
+          controls matches where a user looks for it. */}
+      <button
+        onClick={() => navigate({ kind: "settings" })}
+        title={collapsed ? "Settings" : undefined}
+        aria-label="Settings"
+        className={cn(
+          "mt-auto flex items-center gap-3 rounded-md py-2 text-sm font-medium transition-colors",
+          collapsed ? "justify-center px-0" : "px-2",
+          route.kind === "settings"
+            ? "bg-accent text-accent-foreground"
+            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+        )}
+      >
+        <SettingsIcon className="size-5 shrink-0" />
+        {!collapsed && "Settings"}
+      </button>
+
       {/* Signed in, this is a status chip, not a control — a plain div, so
           it isn't a button that looks pressable and does nothing. Signing
-          out lives in the settings menu, deliberately one step away from a
-          finger resting on the edge of a touch panel. */}
-      <div className="mt-auto">
+          out lives in Settings, deliberately one step away from a finger
+          resting on the edge of a touch panel. */}
+      <div className="mt-1">
         {signedIn ? (
           <div
             title={collapsed ? (account?.name ?? "Signed in") : undefined}

@@ -7,9 +7,12 @@
 @custom-variant short (@media (max-height: 560px));
 
 /*
- * Design tokens ported from YTMLite so the UI is pixel-identical. Only the
- * dark theme is defined here for Phase 1 (the in-car display is always dark);
- * the light theme is added when the Settings screen is ported.
+ * Design tokens ported from YTMLite so the UI is pixel-identical. Both
+ * themes are defined: `:root` is light, `.dark` overrides. The Settings
+ * screen's Theme control toggles the `dark` class on <html> — see
+ * `useThemeSync` in store/settingsStore's consumer (app/AppShell.tsx).
+ * Dark remains the default in index.html, so a cold boot on the in-car
+ * display never flashes white before React hydrates.
  */
 :root {
   --titlebar-h: 60px;
@@ -17,9 +20,33 @@
   /* YouTube brand red */
   --brand: #fa1f3e;
   --brand-foreground: oklch(0.985 0 0);
+
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --primary: var(--brand);
+  --primary-foreground: var(--brand-foreground);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --ring: var(--brand);
+
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+
+  --surface: oklch(1 0 0 / 55%);
+  --surface-active: oklch(1 0 0 / 85%);
+  --hairline: oklch(0 0 0 / 12%);
 }
 
 .dark {
+  --destructive: oklch(0.704 0.191 22.216);
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
@@ -31,6 +58,7 @@
   --accent: oklch(1 0 0 / 10%);
   --accent-foreground: oklch(0.985 0 0);
   --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
   --ring: var(--brand);
 
   --sidebar: oklch(0.205 0 0);
@@ -57,6 +85,11 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-border: var(--border);
+  /* `border-input` and the `destructive` error cards were already used by
+     Explore/Playlist/Album/Artist but never had tokens, so those classes
+     were never generated and the cards rendered unstyled. */
+  --color-input: var(--input);
+  --color-destructive: var(--destructive);
   --color-ring: var(--ring);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
@@ -89,6 +122,26 @@
     margin: 0;
   }
 
+  /* Nothing in this app is text you select — it's a car dashboard driven
+     by a fingertip. Leaving selection on meant every attempt to drag the
+     page highlighted a track title instead, which is the single thing
+     that made one-finger scrolling feel broken. Inputs opt back in below
+     so the search box still behaves like a text field.
+
+     `-webkit-touch-callout` suppresses the long-press callout that
+     WebKit raises on a press-and-hold — a gesture that is now a scroll. */
+  * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  input,
+  textarea,
+  [contenteditable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
   /* 40px, not the usual 8 — this is a finger target on the Pi's touch
      panel, not a mouse target.
 
@@ -111,13 +164,27 @@
   /* The thumb spans the full 40px so all of it is draggable, but paints
      only the middle 20px: a 40px-wide solid bar reads as a UI panel rather
      than a scrollbar. `background-clip: padding-box` is what keeps the
-     transparent border grabbable instead of merely invisible. */
+     transparent border grabbable instead of merely invisible.
+
+     `min-height` is the fix for "the scrollbar is nearly invisible on
+     Explore but fine on Home": both screens share one scroller, so the
+     difference was never the bar — it was the thumb. A thumb's length is
+     proportional to viewport/content, and Explore's feeds are several
+     times longer than Home's, which on a 440px-tall panel shrank it to a
+     few pixels. Flooring it keeps it grabbable however long the feed
+     gets. */
   .shelf-scroll::-webkit-scrollbar-thumb,
   .app-scroll::-webkit-scrollbar-thumb {
     background: var(--border);
     background-clip: padding-box;
     border: 10px solid transparent;
     border-radius: 9999px;
+    min-height: 56px;
+  }
+  .shelf-scroll::-webkit-scrollbar-thumb:horizontal,
+  .app-scroll::-webkit-scrollbar-thumb:horizontal {
+    min-height: 0;
+    min-width: 56px;
   }
   .shelf-scroll::-webkit-scrollbar-thumb:hover,
   .app-scroll::-webkit-scrollbar-thumb:hover {

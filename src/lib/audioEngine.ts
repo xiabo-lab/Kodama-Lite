@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { usePlaybackStore } from "@/store/playbackStore";
+import { useSettingsStore } from "@/store/settingsStore";
 
 /**
  * Owns the single `<audio>` element for the app's lifetime and wires it to
@@ -21,6 +22,30 @@ import { usePlaybackStore } from "@/store/playbackStore";
  */
 export function useAudioEngine(): void {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Resume-on-startup. The store already restores the queue and index
+  // from the last session (see `loadQueueCache`) with `position: 0` and
+  // `playing: false`; this decides whether to actually press play, and
+  // the track therefore starts from its beginning rather than where it
+  // was interrupted — which is the behaviour the setting promises.
+  //
+  // Gated on the yt-dlp binary being ready rather than firing at mount:
+  // on a very first launch the managed binary is still downloading, and
+  // a resolve issued before then fails and leaves the bar in an error
+  // state the user never asked for. The ref makes it strictly one-shot,
+  // so toggling the setting later never retriggers it.
+  const ytdlpPhase = usePlaybackStore((s) => s.ytdlpPhase);
+  const didResumeRef = useRef(false);
+  useEffect(() => {
+    if (didResumeRef.current) return;
+    if (ytdlpPhase !== "ready") return;
+    didResumeRef.current = true;
+    if (!useSettingsStore.getState().resumeOnStartup) return;
+    const s = usePlaybackStore.getState();
+    if (s.index < 0 || s.index >= s.queue.length) return;
+    if (s.playing) return;
+    s.resume();
+  }, [ytdlpPhase]);
 
   // The element itself: created once, torn down on unmount.
   useEffect(() => {

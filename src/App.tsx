@@ -11,6 +11,7 @@ import { useSearchStore } from "@/store/searchStore";
 import { usePlaylistStore } from "@/store/playlistStore";
 import { useAlbumStore } from "@/store/albumStore";
 import { useArtistStore } from "@/store/artistStore";
+import { useLibraryStore } from "@/store/libraryStore";
 import { useLyricsStore } from "@/store/lyricsStore";
 import { AppShell } from "@/app/AppShell";
 
@@ -41,6 +42,7 @@ export default function App() {
     usePlaylistStore.getState().applyEvents(events);
     useAlbumStore.getState().applyEvents(events);
     useArtistStore.getState().applyEvents(events);
+    useLibraryStore.getState().applyEvents(events);
     useLyricsStore.getState().applyEvents(events);
   }, []);
 

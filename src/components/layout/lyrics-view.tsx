@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useLyricsStore } from "@/store/lyricsStore";
 import { usePlaybackStore } from "@/store/playbackStore";
+import { useSettingsStore } from "@/store/settingsStore";
 import type { TimedLine } from "@/lib/lyrics/types";
 import { cn } from "@/lib/utils";
 
@@ -78,8 +79,16 @@ function TimedLyrics({ lines, display = "panel" }: { lines: TimedLine[]; display
   const stage = display === "stage";
   const scrollRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
-  const position = usePlaybackStore((s) => s.position);
+  const rawPosition = usePlaybackStore((s) => s.position);
   const seek = usePlaybackStore((s) => s.seek);
+  // Bluetooth to the car speakers arrives a fraction of a second after
+  // this app's playback clock, so the highlight lands ahead of what's
+  // being sung. Settings → Lyrics timing shifts line selection to
+  // compensate; positive holds the lyrics back. Applied only to line
+  // *selection* — `seek` still targets the true timestamp, so tapping a
+  // line jumps to where that line really is in the audio.
+  const offset = useSettingsStore((s) => s.lyricsOffsetSec);
+  const position = rawPosition - offset;
 
   const activeIdx = findActiveIdx(lines, position);
   const prevActiveRef = useRef(activeIdx);
@@ -87,7 +96,13 @@ function TimedLyrics({ lines, display = "panel" }: { lines: TimedLine[]; display
   useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
-    const idx = findActiveIdx(lines, usePlaybackStore.getState().position);
+    // Same offset the render path applies — otherwise the jump-to-current
+    // scroll on mount would target a different line than the one about to
+    // be highlighted.
+    const idx = findActiveIdx(
+      lines,
+      usePlaybackStore.getState().position - offset,
+    );
     prevActiveRef.current = idx;
     if (idx < 0) {
       container.scrollTop = 0;
@@ -99,7 +114,7 @@ function TimedLyrics({ lines, display = "panel" }: { lines: TimedLine[]; display
       return;
     }
     container.scrollTop = scrollTargetTop(container, el, idx, stage);
-  }, [lines, stage]);
+  }, [lines, stage, offset]);
 
   useEffect(() => {
     if (activeIdx === prevActiveRef.current) return;

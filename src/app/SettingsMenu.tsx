@@ -9,6 +9,7 @@ import {
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   RefreshCwIcon,
+  SettingsIcon,
   WifiIcon,
   WifiOffIcon,
   type LucideIcon,
@@ -74,6 +75,7 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
   const online = useAppStore((s) => s.online);
   const collapsed = useAppStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const navigate = useAppStore((s) => s.navigate);
 
   const status = useAuthStore((s) => s.status);
   const account = useAuthStore((s) => s.account);
@@ -129,6 +131,20 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
         onClick={() => {
           if (signedIn) signOut();
           else signIn();
+          onClose();
+        }}
+      />
+
+      <Divider />
+      {/* This menu is the quick-access subset. Everything that needs room
+          — theme, resume-on-startup, the lyrics offset slider — lives on
+          the Settings screen; duplicating those controls here would mean
+          two places to keep in step for no gain. */}
+      <MenuItem
+        icon={SettingsIcon}
+        label="All settings"
+        onClick={() => {
+          navigate({ kind: "settings" });
           onClose();
         }}
       />
