@@ -74,11 +74,13 @@ export function PlayerBar() {
           The karaoke stage renders its own. */}
       {!karaokeOpen && <QueuePanel />}
       <div className="flex items-center gap-4">
-        {/* Fixed-width meta block rather than `flex-1`. On the Pi's
-            1920px-wide panel a flexible one claimed half the bar for a
-            two-line label, leaving the controls bunched into the right
-            half; pinning it hands every spare pixel to the row below. */}
-        <div className="flex w-64 shrink-0 items-center gap-3">
+        {/* A quarter of the bar, not a flexible half and not a fixed 256px.
+            Flexible claimed half the width and bunched the controls; 256px
+            truncated most song titles after a few words. A quarter is
+            enough for a real title and artist, and the controls give the
+            width back by tightening their own spacing — `justify-between`
+            redistributes whatever is left, so nothing needed re-tuning. */}
+        <div className="flex w-1/4 shrink-0 items-center gap-3">
           {/* This was a bare `<div>` — a grey placeholder that never
               rendered anything, so the corner of the screen showing the
               current track's cover simply never worked. */}
