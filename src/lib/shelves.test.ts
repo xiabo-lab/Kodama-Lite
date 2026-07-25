@@ -31,10 +31,16 @@ describe("isPlaceholderTitle", () => {
       "Section highlights",
       "Section",
       "Trending",
-      "",
     ]) {
       expect(isPlaceholderTitle(t)).toBe(false);
     }
+  });
+
+  it("treats an empty title as a placeholder", () => {
+    // Explore blanks its shelf titles on purpose; "no title" and "a title
+    // we invented" should both render as no heading.
+    expect(isPlaceholderTitle("")).toBe(true);
+    expect(isPlaceholderTitle("   ")).toBe(true);
   });
 });
 

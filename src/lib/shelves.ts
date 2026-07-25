@@ -14,7 +14,11 @@ import type { Shelf } from "@/lib/innertube/types";
  * heading would have cost.
  */
 export function isPlaceholderTitle(title: string): boolean {
-  return /^Section \d+$/.test(title.trim());
+  const t = title.trim();
+  // Empty counts too: Explore blanks its shelf titles deliberately, and
+  // "no title" and "a title we invented" should render identically —
+  // as no heading at all.
+  return t === "" || /^Section \d+$/.test(t);
 }
 
 /**

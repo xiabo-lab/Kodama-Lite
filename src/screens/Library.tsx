@@ -6,7 +6,7 @@ import { useAuthStore } from "@/store/authStore";
 import { useAppStore } from "@/store/appStore";
 import { ShelfCard } from "@/components/shared/shelf-card";
 import { TrackList } from "@/components/shared/track-list";
-import { cn } from "@/lib/utils";
+import { VerticalTabs } from "@/components/shared/vertical-tabs";
 
 /**
  * Library, ported from YTMLite's `routes/library.tsx`: four tabs over the
@@ -42,27 +42,11 @@ export function Library() {
   if (!signedIn) return <SignedOut pending={status === "pending"} onSignIn={signIn} />;
 
   return (
-    <div className="flex flex-col gap-6 px-6 pb-6 pt-2">
-
-      <div className="flex gap-1.5">
-        {LIBRARY_TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setTab(t.id)}
-            className={cn(
-              "min-h-11 rounded-full border px-4 text-sm font-medium transition-colors",
-              tab === t.id
-                ? "border-transparent bg-foreground text-background"
-                : "border-input bg-transparent text-foreground hover:bg-accent",
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
+    <div className="flex gap-4 px-6 pb-6 pt-2">
+      <VerticalTabs tabs={LIBRARY_TABS} active={tab} onSelect={setTab} />
+      <div className="min-w-0 flex-1">
+        <TabBody tab={tab} />
       </div>
-
-      <TabBody tab={tab} />
     </div>
   );
 }

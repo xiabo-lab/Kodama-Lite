@@ -4,7 +4,7 @@ import { dispatchContent, type ExploreFeed } from "@/lib/network";
 import { useExploreStore } from "@/store/exploreStore";
 import { isCategoryOnlyShelf } from "@/lib/shelves";
 import { ShelfSection } from "@/components/shared/shelf-section";
-import { cn } from "@/lib/utils";
+import { VerticalTabs } from "@/components/shared/vertical-tabs";
 
 const TABS: { feed: ExploreFeed; label: string }[] = [
   { feed: "explore", label: "Explore" },
@@ -40,34 +40,28 @@ export function Explore() {
   //
   // Only on this feed: the Moods & genres tab is category tiles all the way
   // down, and filtering them there would leave it blank.
-  const shelves =
+  // Shelf titles are dropped here as well as the category tiles. With
+  // ~238px of content area, a heading row is the difference between
+  // seeing a row of artwork and seeing the top third of it; the tab
+  // column on the left already says which feed you're looking at.
+  const shelves = (
     tab === "explore"
       ? current.shelves.filter((s) => !isCategoryOnlyShelf(s))
-      : current.shelves;
+      : current.shelves
+  ).map((s) => ({ ...s, title: "" }));
 
   const showSkeleton = current.status === "loading" && current.shelves.length === 0;
   const showEmptyError = current.status === "error" && current.shelves.length === 0;
 
   return (
-    <div className="flex flex-col gap-6 px-6 pb-6 pt-2">
+    <div className="flex gap-4 px-6 pb-6 pt-2">
+      <VerticalTabs
+        tabs={TABS.map((t) => ({ id: t.feed, label: t.label }))}
+        active={tab}
+        onSelect={setTab}
+      />
 
-      <div className="flex gap-1.5">
-        {TABS.map((t) => (
-          <button
-            key={t.feed}
-            type="button"
-            onClick={() => setTab(t.feed)}
-            className={cn(
-              "rounded-full border px-3.5 py-1 text-sm font-medium transition-colors",
-              tab === t.feed
-                ? "border-transparent bg-foreground text-background"
-                : "border-input bg-transparent text-foreground hover:bg-white/10",
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-6">
 
       {showSkeleton && (
         <div className="flex items-center justify-center py-16 text-muted-foreground">
@@ -107,6 +101,7 @@ export function Explore() {
           Load more
         </button>
       )}
+      </div>
     </div>
   );
 }
