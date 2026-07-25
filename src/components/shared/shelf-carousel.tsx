@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { ShelfCard } from "@/components/shared/shelf-card";
+import { isPlaceholderTitle } from "@/lib/shelves";
 import { cn } from "@/lib/utils";
 import type { Shelf } from "@/lib/innertube/types";
 
@@ -108,14 +109,18 @@ export function ShelfCarousel({ shelf, action }: Props) {
 
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex items-baseline justify-between gap-3 px-1">
-        <h2 className="truncate text-xl font-semibold tracking-tight">{shelf.title}</h2>
-        {action ? (
-          <div className="shrink-0">{action}</div>
-        ) : shelf.subtitle ? (
-          <span className="truncate text-sm text-muted-foreground">{shelf.subtitle}</span>
-        ) : null}
-      </div>
+      {isPlaceholderTitle(shelf.title) && !action && !shelf.subtitle ? null : (
+        <div className="flex items-baseline justify-between gap-3 px-1">
+          <h2 className="truncate text-xl font-semibold tracking-tight">
+            {isPlaceholderTitle(shelf.title) ? "" : shelf.title}
+          </h2>
+          {action ? (
+            <div className="shrink-0">{action}</div>
+          ) : shelf.subtitle ? (
+            <span className="truncate text-sm text-muted-foreground">{shelf.subtitle}</span>
+          ) : null}
+        </div>
+      )}
 
       <div
         ref={scrollRef}

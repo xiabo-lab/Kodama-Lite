@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Loader2Icon, AlertCircleIcon } from "lucide-react";
 import { dispatchContent, type ExploreFeed } from "@/lib/network";
 import { useExploreStore } from "@/store/exploreStore";
+import { isCategoryOnlyShelf } from "@/lib/shelves";
 import { ShelfSection } from "@/components/shared/shelf-section";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +30,20 @@ export function Explore() {
       dispatchContent({ type: "explore:load", feed: tab });
     }
   }, [tab, current.status]);
+
+  // Drop the shelf of category tiles from the Explore feed itself. YouTube
+  // ships "New releases / Charts / Moods & genres / Podcasts" as navigation
+  // buttons, which is exactly what the tab row above already is — the same
+  // four destinations twice, costing ~100px of a 238px content area and
+  // pushing the actual albums off the screen. Its heading was "Section 1"
+  // too, the parser's fallback for a shelf YouTube gave no title.
+  //
+  // Only on this feed: the Moods & genres tab is category tiles all the way
+  // down, and filtering them there would leave it blank.
+  const shelves =
+    tab === "explore"
+      ? current.shelves.filter((s) => !isCategoryOnlyShelf(s))
+      : current.shelves;
 
   const showSkeleton = current.status === "loading" && current.shelves.length === 0;
   const showEmptyError = current.status === "error" && current.shelves.length === 0;
@@ -61,7 +76,7 @@ export function Explore() {
       )}
 
       <div className="flex flex-col gap-8">
-        {current.shelves.map((shelf) => (
+        {shelves.map((shelf) => (
           <ShelfSection key={shelf.id} shelf={shelf} />
         ))}
       </div>
