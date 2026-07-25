@@ -63,6 +63,49 @@ own Bluetooth settings first, then set it as the output device. Once the app is
 running, the car should show the track title and artist and its transport buttons
 should work — that comes from the MPRIS service the app publishes.
 
+### Run it as a service (recommended)
+
+The desktop autostart entry launches the app once and gives up if it dies — in a car
+that means a black screen and no way to find out why. A user service restarts it and
+keeps logs:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/kodama-lite.service <<'UNIT'
+[Unit]
+Description=Kodama-Lite
+After=default.target
+
+[Service]
+Type=simple
+Environment=WAYLAND_DISPLAY=wayland-0
+ExecStartPre=/bin/sh -c 'until [ -e "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; do sleep 1; done'
+ExecStart=/usr/bin/kodama-lite
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+UNIT
+# Remove the desktop autostart first, or you get two copies.
+mv ~/.config/autostart/Kodama-Lite.desktop ~/ 2>/dev/null
+systemctl --user daemon-reload
+systemctl --user enable --now kodama-lite.service
+```
+
+`ExecStartPre` waits for the compositor: user services can start before the Wayland
+socket exists, and without a display the app exits immediately and `Restart=always`
+turns that into a loop.
+
+Read the log with:
+
+```bash
+journalctl _SYSTEMD_USER_UNIT=kodama-lite.service -n 50 -f
+```
+
+(Add yourself to the `systemd-journal` group — `sudo usermod -aG systemd-journal $USER`
+— or prefix with `sudo`.)
+
 ### Updating
 
 Repeat step 2 with the newer version number; `apt` upgrades in place and keeps your
@@ -73,6 +116,8 @@ thing is scripted:
 bash scripts/update-pi.sh          # check, then install if newer
 bash scripts/update-pi.sh --check  # report only, change nothing
 ```
+
+Restart it afterwards with `systemctl --user restart kodama-lite`.
 
 ### If something is wrong
 
@@ -88,6 +133,10 @@ bash scripts/update-pi.sh --check  # report only, change nothing
 - **A track won't play** — the player bar says so rather than failing silently. The
   first play of any track has to fetch it, so give it a few seconds; it's cached
   afterwards and replays use no data.
+- **Intermittent audio, radio or SD-card trouble** — check `vcgencmd get_throttled`
+  first. Anything other than `0x0` means the Pi has browned out at some point, and an
+  under-powered supply produces exactly the kind of symptoms that look like software
+  bugs. The Pi 5 wants a 27W USB-C supply.
 
 ## The idea in one picture
 

@@ -19,3 +19,7 @@ Reference Project/
 *.local
 .vscode/*
 !.vscode/extensions.json
+
+# Ad-hoc device captures pulled over SSH while iterating on layout.
+# The ones the README uses live in docs/ and are committed deliberately.
+pi-screenshot.png
