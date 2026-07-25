@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { dispatch } from "@/bus/bus";
-import { dispatchContent } from "@/lib/network";
 import { useLyricsStore } from "@/store/lyricsStore";
+import { useRadioStore } from "@/store/radioStore";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useSettingsStore } from "@/store/settingsStore";
 
@@ -127,15 +127,14 @@ export function useAudioEngine(): void {
   const seedVideoId = usePlaybackStore((s) =>
     s.index >= 0 ? s.queue[s.index]?.videoId : undefined,
   );
-  const radioFetchedForRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!autoRadio) return;
     if (queueIndex < 0 || !seedVideoId) return;
     // Only when the current track is the last one queued.
     if (queueIndex < queueLen - 1) return;
-    if (radioFetchedForRef.current === seedVideoId) return;
-    radioFetchedForRef.current = seedVideoId;
-    dispatchContent({ type: "radio:load", videoId: seedVideoId });
+    // Dedupe lives in the store, not a ref here, so a failed station can
+    // be retried — see `radioStore.request`.
+    useRadioStore.getState().request(seedVideoId);
   }, [autoRadio, queueIndex, queueLen, seedVideoId]);
 
   // The element itself: created once, torn down on unmount.

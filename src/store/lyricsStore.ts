@@ -176,7 +176,14 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
   lyrics: null,
 
   load: (params) => {
-    if (get().videoId === params.videoId && get().status !== "idle") return;
+    // Re-entrant guard, but "error" is deliberately NOT a terminal state:
+    // otherwise a track whose lyrics fetch failed once could never be
+    // retried, because `load()` is called with the same videoId every
+    // time you come back to it.
+    const s = get();
+    if (s.videoId === params.videoId && s.status !== "idle" && s.status !== "error") {
+      return;
+    }
 
     // Cache hit: serve it synchronously and don't touch the network. This
     // is what makes replaying a track — and playing one offline — free.

@@ -39,6 +39,7 @@ export function PlayerBar() {
   const duration = usePlaybackStore((s) => s.duration);
   const volume = usePlaybackStore((s) => s.volume);
   const muted = usePlaybackStore((s) => s.muted);
+  const playError = usePlaybackStore((s) => s.error);
 
   const toggle = usePlaybackStore((s) => s.toggle);
   const next = usePlaybackStore((s) => s.next);
@@ -53,6 +54,7 @@ export function PlayerBar() {
   const track = index >= 0 ? queue[index] : undefined;
   const hasTrack = !!track;
   const loading = status === "loading";
+  const error = status === "error" ? playError : undefined;
 
   const barRef = useRef<HTMLDivElement | null>(null);
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -77,14 +79,41 @@ export function PlayerBar() {
             two-line label, leaving the controls bunched into the right
             half; pinning it hands every spare pixel to the row below. */}
         <div className="flex w-64 shrink-0 items-center gap-3">
-          <div className="size-11 shrink-0 rounded-md border border-hairline bg-muted" />
+          {/* This was a bare `<div>` — a grey placeholder that never
+              rendered anything, so the corner of the screen showing the
+              current track's cover simply never worked. */}
+          <div className="size-11 shrink-0 overflow-hidden rounded-md border border-hairline bg-muted">
+            {track?.thumbnail ? (
+              <img
+                src={track.thumbnail}
+                alt=""
+                decoding="async"
+                referrerPolicy="no-referrer"
+                className="size-full object-cover"
+              />
+            ) : null}
+          </div>
           <div className="flex min-w-0 flex-col">
             <span className="truncate text-base font-semibold leading-tight">
               {track?.title ?? "Nothing playing"}
             </span>
-            <span className="truncate text-sm text-muted-foreground">
-              {track?.subtitle ?? "Pick a track to start"}
-            </span>
+            {/* Resolving a track can take a few seconds on a cold cache
+                (yt-dlp has to fetch it). Saying so beats a title sitting
+                there doing nothing, which reads as a hung app. */}
+            {loading ? (
+              <span className="flex items-center gap-1.5 truncate text-sm text-brand">
+                <Loader2Icon className="size-4 shrink-0 animate-spin" />
+                Loading…
+              </span>
+            ) : error ? (
+              <span className="truncate text-sm text-brand" title={error}>
+                Couldn't play this track
+              </span>
+            ) : (
+              <span className="truncate text-sm text-muted-foreground">
+                {track?.subtitle ?? "Pick a track to start"}
+              </span>
+            )}
           </div>
         </div>
 

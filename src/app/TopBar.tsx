@@ -4,7 +4,6 @@ import {
   ArrowRightIcon,
   MaximizeIcon,
   MinimizeIcon,
-  MoreHorizontalIcon,
   PanelLeftIcon,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -32,8 +31,6 @@ export function TopBar() {
   const canGoForward = useAppStore((s) => s.index < s.history.length - 1);
   const collapsed = useAppStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
-  const navigate = useAppStore((s) => s.navigate);
-  const onSettings = useAppStore((s) => s.route.kind === "settings");
 
   const { fullscreen, supported, toggleFullscreen } = useFullscreen();
 
@@ -50,13 +47,9 @@ export function TopBar() {
             {fullscreen ? <MinimizeIcon /> : <MaximizeIcon />}
           </button>
         )}
-        <button
-          className={cn(NAV_BTN, onSettings && "text-foreground")}
-          aria-label="Settings"
-          onClick={() => navigate({ kind: "settings" })}
-        >
-          <MoreHorizontalIcon />
-        </button>
+        {/* No settings button here: the sidebar has one, and two entry
+            points to the same screen is one more than the row has room
+            for. */}
         <button
           className={cn(NAV_BTN, collapsed && "text-foreground")}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}

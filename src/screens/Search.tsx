@@ -8,6 +8,7 @@ import { ShelfCard } from "@/components/shared/shelf-card";
 import { ShelfCarousel } from "@/components/shared/shelf-carousel";
 import { TrackList } from "@/components/shared/track-list";
 import { Thumbnail } from "@/components/shared/thumbnail";
+import { OnScreenKeyboard } from "@/components/layout/on-screen-keyboard";
 import type { SearchFilter } from "@/lib/innertube/search";
 import type { Shelf, ShelfItem, TopResultAction } from "@/lib/innertube/types";
 import { cn } from "@/lib/utils";
@@ -40,11 +41,15 @@ export function Search() {
   const setFilter = useSearchStore((s) => s.setFilter);
 
   const [value, setValue] = useState(query);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const debounced = useDebounced(value, 300);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Autofocus only — deliberately NOT auto-opening the keyboard. Arriving
+  // at Search with the panel already covering the screen would hide the
+  // results you came back to look at.
   useEffect(() => {
-    inputRef.current?.focus();
+    inputRef.current?.focus({ preventScroll: true });
   }, []);
 
   useEffect(() => {
@@ -70,12 +75,18 @@ export function Search() {
             ref={inputRef}
             value={value}
             onChange={(e) => setValue(e.target.value)}
+            // Pointer only, NOT focus. Hooking `onFocus` meant the
+            // autofocus effect below opened the keyboard on arrival, so
+            // every trip to Search covered the results with a full-screen
+            // panel. It also let Tab open it, which is the last thing
+            // someone on a physical keyboard wants.
+            onPointerDown={() => setKeyboardOpen(true)}
             onKeyDown={(e) => {
               if (e.key === "Enter") search(value, filter);
               if (e.key === "Escape" && value) setValue("");
             }}
             placeholder="Search songs, albums, artists…"
-            className="h-10 w-full rounded-md border border-input bg-transparent pl-9 pr-9 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="h-12 w-full cursor-pointer rounded-md border border-input bg-transparent pl-9 pr-9 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           {value ? (
             <button
@@ -127,6 +138,19 @@ export function Search() {
         <AllResults data={results} />
       ) : (
         <FilterResults items={results.shelves.flatMap((s) => s.items)} filter={filter} query={query} />
+      )}
+
+      {keyboardOpen && (
+        <OnScreenKeyboard
+          value={value}
+          onChange={setValue}
+          onSubmit={() => {
+            search(value, filter);
+            setKeyboardOpen(false);
+          }}
+          onClose={() => setKeyboardOpen(false)}
+          placeholder="Search songs, albums, artists…"
+        />
       )}
     </div>
   );
