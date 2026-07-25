@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   BookmarkIcon,
   DiscIcon,
@@ -108,7 +109,20 @@ export function Thumbnail({
   id,
   title,
 }: Props) {
-  const src = pickThumbnail(thumbnails, targetSize);
+  const picked = pickThumbnail(thumbnails, targetSize);
+
+  // Fall back when the image FAILS TO LOAD, not merely when the API
+  // shipped no URL. That distinction was the bug: YouTube Music does ship
+  // artwork URLs for its auto-playlists (from www.gstatic.com), so `src`
+  // was non-null, the `<img>` rendered, the request was refused, and the
+  // tile stayed empty — the icon fallback never got a chance. Seeded test
+  // data with an empty array hid it completely.
+  //
+  // Keyed by URL so a new track's image gets a fresh attempt rather than
+  // inheriting the previous one's failure.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const src = picked && picked !== failedSrc ? picked : null;
+
   const auto = src ? null : autoArtFor(id, title ?? alt);
   const Icon = auto?.icon ?? iconFor(kind);
 
@@ -131,6 +145,7 @@ export function Thumbnail({
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
+          onError={() => setFailedSrc(picked)}
           className="size-full object-cover"
         />
       ) : (
