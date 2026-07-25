@@ -26,16 +26,21 @@ export function Home() {
   const showEmptyError = status === "error" && shelves.length === 0;
 
   return (
-    <div className="flex flex-col gap-8 px-6 pb-6 pt-3">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-3xl font-bold tracking-tight">Home</h1>
-        {(!online || stale) && (
-          <span className="flex items-center gap-1.5 rounded-full bg-white/5 px-2.5 py-1 text-xs text-muted-foreground">
-            <WifiOffIcon className="size-3.5" />
-            {online ? "showing saved" : "offline — showing saved"}
-          </span>
-        )}
-      </div>
+    // No "Home" heading. On a 440px panel the title row plus the shelf
+    // title cost two lines of a screen that only has room for about six,
+    // and the sidebar already says which tab you're on — the heading was
+    // pure repetition pushing the first album row below the fold.
+    <div className="relative flex flex-col gap-4 px-6 pb-6 pt-2">
+      {/* Overlaid, not stacked. As a row it cost ~44px — a fifth of the
+          content area — and pushed the first album row's artwork below the
+          fold whenever the feed was stale, which is exactly when you most
+          want to see it. */}
+      {(!online || stale) && (
+        <span className="pointer-events-none absolute right-6 top-2 z-10 flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-xs text-muted-foreground backdrop-blur">
+          <WifiOffIcon className="size-3.5" />
+          {online ? "showing saved" : "offline — showing saved"}
+        </span>
+      )}
 
       {showSkeleton && <HomeSkeleton />}
 

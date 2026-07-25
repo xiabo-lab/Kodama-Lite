@@ -128,9 +128,14 @@ export function ShelfCarousel({ shelf, action }: Props) {
               key={`${item.kind}:${item.id}`}
               className={cn(
                 "shrink-0",
+                // The `short:` widths are what let a whole row of artwork
+                // fit above the fold on the Pi's 440px panel. The card is
+                // square, so its width IS its height, and at lg:w-52 the
+                // bottom of the image landed 10px past the content area —
+                // one scroll away from the thing you opened Home to see.
                 isVideo
-                  ? "w-[calc(11rem*16/9)] md:w-[calc(12rem*16/9)] lg:w-[calc(13rem*16/9)]"
-                  : "w-44 md:w-48 lg:w-52",
+                  ? "w-[calc(11rem*16/9)] md:w-[calc(12rem*16/9)] lg:w-[calc(13rem*16/9)] short:w-[calc(10rem*16/9)]"
+                  : "w-44 md:w-48 lg:w-52 short:w-40",
               )}
             >
               <ShelfCard item={item} />

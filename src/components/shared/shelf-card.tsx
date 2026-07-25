@@ -92,7 +92,7 @@ function pickCategoryIcon(title: string): LucideIcon {
 }
 
 const CARD_CLASS =
-  "group flex w-full flex-col gap-2 rounded-lg p-2 text-left transition-colors hover:bg-accent/60 focus-visible:bg-accent focus-visible:outline-none";
+  "group flex w-full flex-col gap-2 rounded-lg p-2 text-left transition-colors short:gap-1 short:p-1.5 hover:bg-accent/60 focus-visible:bg-accent focus-visible:outline-none";
 
 export function ShelfCard({ item, className }: Props) {
   const subtitle = item.subtitle ?? item.artists?.map((a) => a.name).join(", ") ?? item.album ?? "";
@@ -118,7 +118,7 @@ export function ShelfCard({ item, className }: Props) {
           className={cn("pointer-events-none absolute inset-0 border border-hairline", radiusClass)}
         />
       </div>
-      <div className="flex min-w-0 flex-col gap-0.5">
+      <div className="flex min-w-0 flex-col gap-0.5 short:gap-0">
         <div className={cn("flex min-w-0 items-center gap-1.5", item.round && "justify-center")}>
           <span className="truncate text-sm font-medium">{item.title}</span>
           {item.explicit ? (

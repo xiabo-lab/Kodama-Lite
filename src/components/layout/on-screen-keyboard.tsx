@@ -40,14 +40,19 @@ const ROWS_SYMBOL = [
   ["=", "_", "<", ">", "[", "]", "~"],
 ];
 
+// Heights are `h-full` inside flex-1 rows, NOT a fixed 64px. Fixed rows
+// needed 496px on a 440px panel, so the key rows overflowed upward and
+// physically overlapped the candidate bar — tapping a Chinese candidate
+// also hit the number key sitting under it. Letting the rows divide
+// whatever height is left makes overlap impossible at any screen size.
 const KEY =
-  "flex h-16 min-w-16 flex-1 items-center justify-center rounded-lg bg-white/10 text-2xl font-medium text-foreground transition-colors active:bg-white/25 hover:bg-white/15";
-// Shift and Backspace are wider than a letter key — they're the two most
-// used non-letters and the easiest to fat-finger into a neighbour.
+  "flex h-full min-w-14 flex-1 items-center justify-center rounded-lg bg-white/10 text-2xl font-medium text-foreground transition-colors active:bg-white/25 hover:bg-white/15";
+// Shift and Backspace are wider than a letter key — the two most-used
+// non-letters and the easiest to fat-finger into a neighbour.
 const MOD_KEY =
-  "flex h-16 w-36 shrink-0 items-center justify-center gap-2 rounded-lg bg-white/10 text-lg font-medium text-foreground transition-colors active:bg-white/25 hover:bg-white/15";
+  "flex h-full w-36 shrink-0 items-center justify-center gap-2 rounded-lg bg-white/10 text-lg font-medium text-foreground transition-colors active:bg-white/25 hover:bg-white/15";
 const WIDE =
-  "flex h-16 items-center justify-center gap-2 rounded-lg bg-white/10 px-5 text-lg font-medium text-foreground transition-colors active:bg-white/25 hover:bg-white/15";
+  "flex h-full items-center justify-center gap-2 rounded-lg bg-white/10 px-4 text-lg font-medium text-foreground transition-colors active:bg-white/25 hover:bg-white/15";
 
 export function OnScreenKeyboard({
   value,
@@ -186,6 +191,19 @@ export function OnScreenKeyboard({
           ) : null}
           <span className="ml-0.5 inline-block h-7 w-0.5 animate-pulse bg-brand" />
         </div>
+        {/* Clear sits beside the field it clears, not down among the
+            letters — it acts on the whole query, and next to Backspace it
+            was an easy and expensive mis-tap. */}
+        <button
+          type="button"
+          aria-label="Clear"
+          onClick={clearAll}
+          disabled={!value && !composing}
+          className="flex h-14 shrink-0 items-center justify-center gap-2 rounded-lg bg-white/10 px-4 text-lg font-medium hover:bg-white/15 disabled:opacity-30"
+        >
+          <EraserIcon className="size-6" />
+          Clear
+        </button>
         <button
           type="button"
           aria-label="Close keyboard"
@@ -200,7 +218,7 @@ export function OnScreenKeyboard({
           below don't jump up and down as candidates come and go — a row
           that moves under a finger is worse than a row that's blank. */}
       {chinese ? (
-        <div className="flex h-14 shrink-0 items-center gap-2 overflow-x-auto px-1">
+        <div className="flex h-14 shrink-0 items-center gap-2 overflow-x-auto rounded-lg bg-white/5 px-2">
           {dictError ? (
             <span className="text-sm text-brand">
               Couldn't load the Pinyin dictionary.
@@ -228,9 +246,9 @@ export function OnScreenKeyboard({
         </div>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col justify-center gap-2">
+      <div className="flex min-h-0 flex-1 flex-col gap-2">
         {rows.map((row, i) => (
-          <div key={i} className="flex justify-center gap-2">
+          <div key={i} className="flex min-h-0 flex-1 justify-center gap-2">
             {i === 3 && !symbols && (
               <button
                 type="button"
@@ -265,14 +283,10 @@ export function OnScreenKeyboard({
           </div>
         ))}
 
-        <div className="flex justify-center gap-2">
-          <button
-            type="button"
-            onClick={() => setSymbols((s) => !s)}
-            className={cn(WIDE, "w-28")}
-          >
-            {symbols ? "ABC" : "?123"}
-          </button>
+        <div className="flex min-h-0 flex-1 gap-2">
+          {/* Language toggle in the far-left corner — the one key you reach
+              for without looking, and a corner is the easiest target on the
+              whole panel. */}
           <button
             type="button"
             aria-label="Chinese input"
@@ -282,9 +296,16 @@ export function OnScreenKeyboard({
               setComposing("");
               setShift(false);
             }}
-            className={cn(WIDE, "w-28", chinese && "bg-brand text-white")}
+            className={cn(WIDE, "w-36 shrink-0 text-2xl", chinese && "bg-brand text-white")}
           >
             {chinese ? "中" : "EN"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setSymbols((s) => !s)}
+            className={cn(WIDE, "w-36 shrink-0")}
+          >
+            {symbols ? "ABC" : "?123"}
           </button>
           <button
             type="button"
@@ -294,27 +315,15 @@ export function OnScreenKeyboard({
                 ? commit(candidates[0])
                 : onChange((prev) => prev + " ")
             }
-            className={cn(KEY, "max-w-[28rem] flex-[5]")}
+            className={cn(KEY, "flex-1")}
           >
             space
-          </button>
-          {/* Clear the whole query in one tap — on a touch panel, holding
-              backspace 30 times to fix a search is its own small misery. */}
-          <button
-            type="button"
-            aria-label="Clear"
-            onClick={clearAll}
-            disabled={!value && !composing}
-            className={cn(WIDE, "w-32 disabled:opacity-30")}
-          >
-            <EraserIcon className="size-6" />
-            Clear
           </button>
           <button
             type="button"
             aria-label="Search"
             onClick={submit}
-            className={cn(WIDE, "w-36 bg-brand text-white hover:bg-brand/90")}
+            className={cn(WIDE, "w-40 shrink-0 bg-brand text-white hover:bg-brand/90")}
           >
             <CornerDownLeftIcon className="size-6" />
             Search

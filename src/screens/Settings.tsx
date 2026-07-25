@@ -45,8 +45,7 @@ const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
  */
 export function Settings() {
   return (
-    <div className="flex flex-col gap-2 px-6 pb-6 pt-3">
-      <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
+    <div className="flex flex-col gap-2 px-6 pb-6 pt-2">
       <AccountSection />
       <AppearanceSection />
       <PlaybackSection />

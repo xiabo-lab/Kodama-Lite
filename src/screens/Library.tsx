@@ -42,8 +42,7 @@ export function Library() {
   if (!signedIn) return <SignedOut pending={status === "pending"} onSignIn={signIn} />;
 
   return (
-    <div className="flex flex-col gap-6 px-6 pb-6 pt-3">
-      <h1 className="text-3xl font-bold tracking-tight">Library</h1>
+    <div className="flex flex-col gap-6 px-6 pb-6 pt-2">
 
       <div className="flex gap-1.5">
         {LIBRARY_TABS.map((t) => (
