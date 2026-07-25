@@ -72,8 +72,22 @@ if command -v iw >/dev/null && iw dev wlan0 get power_save >/dev/null 2>&1; then
     if [ "$FIX" -eq 1 ]; then
       if sudo iw dev wlan0 set power_save off; then
         ok "Turned off for this boot."
-        hint "To make it permanent, add to /etc/rc.local before 'exit 0':"
-        hint "  iw dev wlan0 set power_save off"
+        # Bookworm manages wifi with NetworkManager and has no /etc/rc.local,
+        # so persist it on the connection profile instead. `2` is
+        # "powersave disabled" in NM's 802-11-wireless.powersave enum.
+        conn=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null \
+               | awk -F: '$2=="wlan0"{print $1; exit}')
+        if [ -n "$conn" ]; then
+          if sudo nmcli connection modify "$conn" 802-11-wireless.powersave 2 2>/dev/null; then
+            ok "Persisted on NetworkManager connection \"$conn\"."
+          else
+            hint "Persist it yourself:"
+            hint "  sudo nmcli connection modify \"$conn\" 802-11-wireless.powersave 2"
+          fi
+        else
+          hint "Couldn't find the NetworkManager connection to persist it on;"
+          hint "this setting will revert on reboot."
+        fi
       fi
     else
       hint "Fix: sudo iw dev wlan0 set power_save off   (or rerun with --fix)"
@@ -85,11 +99,77 @@ else
   warn "Couldn't read power_save state."
 fi
 
-# ── 3. Bluetooth card profile ─────────────────────────────────────────
+# ── 3. Audio stack ────────────────────────────────────────────────────
+#
+# Checked before the profile because it decides *how* to check the profile
+# — and because a missing pipewire-pulse is itself a strong candidate for
+# glitchy audio. The app's audio comes out of WebKitGTK via GStreamer,
+# which prefers the PulseAudio API; without pipewire-pulse bridging that to
+# PipeWire, GStreamer falls back to writing ALSA directly, and a direct
+# ALSA path to a Bluetooth device is exactly where underruns come from.
+
+log "Audio stack"
+have_pw=0; have_pactl=0; have_wpctl=0
+pgrep -x pipewire >/dev/null 2>&1 && have_pw=1
+command -v pactl >/dev/null && have_pactl=1
+command -v wpctl >/dev/null && have_wpctl=1
+
+if [ "$have_pw" -eq 1 ]; then ok "pipewire is running."; else warn "pipewire is NOT running."; fi
+if pgrep -x wireplumber >/dev/null 2>&1; then ok "wireplumber is running."; else warn "wireplumber is NOT running."; fi
+
+if pgrep -f 'pipewire-pulse' >/dev/null 2>&1; then
+  ok "pipewire-pulse is running (GStreamer can use the PulseAudio API)."
+else
+  warn "pipewire-pulse is NOT running — LIKELY RELEVANT."
+  hint "WebKitGTK plays through GStreamer, which prefers the PulseAudio API."
+  hint "Without the bridge it falls back to raw ALSA, which underruns on a"
+  hint "Bluetooth sink — glitchy, stuttery audio, exactly the symptom."
+  hint "Fix: sudo apt install -y pipewire-pulse gstreamer1.0-pipewire"
+  hint "     systemctl --user restart pipewire pipewire-pulse wireplumber"
+fi
+
+if [ "$have_pactl" -eq 0 ]; then
+  warn "pactl not installed (it lives in pulseaudio-utils)."
+  if [ "$have_wpctl" -eq 1 ]; then
+    hint "Using wpctl instead — it ships with pipewire and is equivalent here."
+  else
+    hint "Install one for diagnosis: sudo apt install -y pulseaudio-utils"
+  fi
+fi
+
+log "Default sink (where audio actually goes)"
+if [ "$have_wpctl" -eq 1 ]; then
+  wpctl status 2>/dev/null | sed -n '/Audio/,/Video/p' | grep -E '^\s+[│├└]|Sinks' | head -14 | sed 's/^/  /'
+  if wpctl status 2>/dev/null | grep -qiE '\*.*(bluez|BT20A|Fosi)'; then
+    ok "The default sink is the Bluetooth device."
+  else
+    warn "The default sink does NOT look like the Bluetooth device."
+    hint "Audio may be going to HDMI or the headphone jack instead."
+    hint "Set it with: wpctl set-default <id-from-the-list-above>"
+  fi
+elif [ "$have_pactl" -eq 1 ]; then
+  pactl info 2>/dev/null | grep -i 'default sink' | sed 's/^/  /'
+fi
+
+# ── 4. Bluetooth card profile ─────────────────────────────────────────
 
 log "Bluetooth audio profile"
-if ! command -v pactl >/dev/null; then
-  warn "pactl not found — is pipewire-pulse (or pulseaudio) installed?"
+if [ "$have_pactl" -eq 0 ]; then
+  # No pactl: report what wpctl can see. wpctl can't switch card profiles
+  # (that's still a pactl-only operation), so say so rather than pretend.
+  if [ "$have_wpctl" -eq 1 ]; then
+    if wpctl status 2>/dev/null | grep -qiE 'bluez|BT20A|Fosi'; then
+      ok "A Bluetooth sink is present:"
+      wpctl status 2>/dev/null | grep -iE 'bluez|BT20A|Fosi' | head -4 | sed 's/^/  /'
+      hint "A sink appearing at all means A2DP negotiated — the headset"
+      hint "profile exposes no sink of this kind. So the profile is fine."
+    else
+      warn "No Bluetooth sink visible. Is the BT20A connected?"
+      hint "Check: bluetoothctl devices Connected"
+    fi
+  else
+    warn "Neither pactl nor wpctl available — cannot inspect the profile."
+  fi
 else
   card=$(pactl list cards short 2>/dev/null | awk '/bluez/ {print $2; exit}')
   if [ -z "$card" ]; then
@@ -128,43 +208,103 @@ else
   fi
 fi
 
-# ── 4. Codec ──────────────────────────────────────────────────────────
+# ── 5. Codec ──────────────────────────────────────────────────────────
+#
+# WirePlumber changed its ENTIRE config system between 0.4 and 0.5: 0.4
+# reads Lua from bluetooth.lua.d/, 0.5 reads SPA-JSON from
+# wireplumber.conf.d/. Each silently ignores the other's files — so writing
+# the wrong one looks like it worked and does nothing at all. Detect the
+# version and write the matching format.
 
 log "Codec"
-if command -v pactl >/dev/null; then
+if [ "$have_pactl" -eq 1 ]; then
   codec=$(pactl list cards 2>/dev/null | grep -iE 'bluetooth.codec' | head -1 | sed 's/.*= *//' | tr -d '"')
   ok "In use: ${codec:-unknown}"
+else
+  hint "Codec readout needs pactl; skipping."
 fi
 
-WP_DIR="$HOME/.config/wireplumber/wireplumber.conf.d"
-WP_CONF="$WP_DIR/51-bluez-quality.conf"
-if [ -f "$WP_CONF" ]; then
-  ok "SBC-XQ config already present at $WP_CONF"
+wp_ver=$(wireplumber --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
+wp_major=${wp_ver%%.*}
+wp_minor=${wp_ver##*.}
+ok "WirePlumber ${wp_ver:-unknown}"
+
+if [ -z "$wp_ver" ]; then
+  warn "Couldn't determine the WirePlumber version — skipping codec config."
+  warn "Writing the wrong format would silently do nothing."
 else
-  warn "SBC-XQ not enabled (roughly doubles SBC bitrate)."
-  if [ "$FIX" -eq 1 ]; then
-    mkdir -p "$WP_DIR"
-    cat > "$WP_CONF" <<'CONF'
-# Higher-quality SBC, and A2DP only.
+  if [ "$wp_major" -eq 0 ] && [ "$wp_minor" -lt 5 ] 2>/dev/null; then
+    WP_STYLE="lua"
+    WP_DIR="$HOME/.config/wireplumber/bluetooth.lua.d"
+    WP_CONF="$WP_DIR/51-bluez-quality.lua"
+    STALE="$HOME/.config/wireplumber/wireplumber.conf.d/51-bluez-quality.conf"
+  else
+    WP_STYLE="conf"
+    WP_DIR="$HOME/.config/wireplumber/wireplumber.conf.d"
+    WP_CONF="$WP_DIR/51-bluez-quality.conf"
+    STALE="$HOME/.config/wireplumber/bluetooth.lua.d/51-bluez-quality.lua"
+  fi
+
+  # An earlier run of this script (before it knew about the split) may have
+  # left a file in the format this version ignores. Say so — a stale file
+  # that does nothing is worse than none, because it reads as configured.
+  if [ -f "$STALE" ]; then
+    warn "Found a config in the OTHER format, which this version ignores:"
+    warn "  $STALE"
+    if [ "$FIX" -eq 1 ]; then
+      rm -f "$STALE" && ok "Removed it."
+    else
+      hint "Rerun with --fix to remove it."
+    fi
+  fi
+
+  if [ -f "$WP_CONF" ]; then
+    ok "Codec config present, correct format: $WP_CONF"
+  else
+    warn "SBC-XQ not enabled (roughly doubles SBC bitrate)."
+    if [ "$FIX" -eq 1 ]; then
+      mkdir -p "$WP_DIR"
+      if [ "$WP_STYLE" = "lua" ]; then
+        cat > "$WP_CONF" <<'CONF'
+-- Higher-quality SBC, and A2DP only. WirePlumber 0.4 (Lua) format.
+--
+-- enable-sbc-xq raises the SBC bitpool well above the default, a clear
+-- audible improvement on a healthy link.
+--
+-- Restricting roles to the A2DP ones stops anything ever negotiating the
+-- HSP/HFP headset profile (8-16kHz mono). A speaker with no microphone has
+-- no reason to offer it.
+bluez_monitor.properties = {
+  ["bluez5.enable-sbc-xq"] = true,
+  ["bluez5.roles"] = "[ a2dp_sink a2dp_source ]",
+}
+CONF
+      else
+        cat > "$WP_CONF" <<'CONF'
+# Higher-quality SBC, and A2DP only. WirePlumber 0.5+ (SPA-JSON) format.
 #
-# enable-sbc-xq raises the SBC bitpool well above the default, which is a
-# clear audible improvement on a healthy link.
+# enable-sbc-xq raises the SBC bitpool well above the default, a clear
+# audible improvement on a healthy link.
 #
-# Restricting `roles` to the A2DP ones stops anything from ever negotiating
-# the HSP/HFP headset profile, which is 8-16kHz mono. A speaker with no
-# microphone has no reason to offer it.
+# Restricting roles to the A2DP ones stops anything ever negotiating the
+# HSP/HFP headset profile (8-16kHz mono). A speaker with no microphone has
+# no reason to offer it.
 monitor.bluez.properties = {
   bluez5.enable-sbc-xq = true
   bluez5.roles = [ a2dp_sink a2dp_source ]
 }
 CONF
-    ok "Wrote $WP_CONF"
-    systemctl --user restart wireplumber 2>/dev/null \
-      && ok "Restarted wireplumber." \
-      || hint "Restart it yourself: systemctl --user restart wireplumber"
-    hint "Then re-pair or reconnect the BT20A so it renegotiates the codec."
-  else
-    hint "Fix: rerun with --fix to write $WP_CONF"
+      fi
+      ok "Wrote $WP_CONF ($WP_STYLE format, matching WirePlumber $wp_ver)"
+      systemctl --user restart wireplumber 2>/dev/null \
+        && ok "Restarted wireplumber." \
+        || hint "Restart it yourself: systemctl --user restart wireplumber"
+      hint "Now DISCONNECT and RECONNECT the BT20A — the codec is negotiated"
+      hint "when the link is established, so an existing connection keeps the"
+      hint "old one."
+    else
+      hint "Fix: rerun with --fix to write $WP_CONF"
+    fi
   fi
 fi
 
