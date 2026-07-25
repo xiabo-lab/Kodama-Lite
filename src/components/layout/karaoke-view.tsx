@@ -9,13 +9,10 @@ import {
   ShuffleIcon,
   SkipBackIcon,
   SkipForwardIcon,
-  Volume2Icon,
-  VolumeXIcon,
   XIcon,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePlaybackStore } from "@/store/playbackStore";
-import { useLyricsStore } from "@/store/lyricsStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
 import { useLikedSongsStore } from "@/store/likedSongsStore";
 import { LyricsBody, STAGE_LEADING } from "@/components/layout/lyrics-view";
@@ -50,41 +47,29 @@ function formatTime(seconds: number): string {
 }
 
 /**
- * Mute toggle + slider. Its own component so the ~60Hz-adjacent volume
- * subscription re-renders this pair rather than the whole stage (the same
- * reason `AudioEngine` is split out of `AppShell`).
+ * Volume slider. Its own component so the volume subscription re-renders
+ * this alone rather than the whole stage (the same reason `AudioEngine` is
+ * split out of `AppShell`).
  *
- * The track is deliberately taller than the player bar's 6px one — this is
- * the version you drag with a fingertip while driving.
+ * No mute button, and the same 368px length as the player bar's: at this
+ * width dragging to zero is quicker than finding a toggle, and `setVolume`
+ * clears `muted`, so dragging back up always restores sound.
  */
 function KaraokeVolume() {
   const volume = usePlaybackStore((s) => s.volume);
   const muted = usePlaybackStore((s) => s.muted);
   const setVolume = usePlaybackStore((s) => s.setVolume);
-  const toggleMute = usePlaybackStore((s) => s.toggleMute);
-  const Icon = muted || volume === 0 ? VolumeXIcon : Volume2Icon;
 
   return (
-    <div className="flex items-center gap-2">
-      <button
-        type="button"
-        aria-label={muted ? "Unmute" : "Mute"}
-        aria-pressed={muted}
-        onClick={toggleMute}
-        className={SECONDARY_BTN}
-      >
-        <Icon />
-      </button>
-      <input
-        type="range"
-        min={0}
-        max={100}
-        value={muted ? 0 : Math.round(volume * 100)}
-        onChange={(e) => setVolume(Number(e.target.value) / 100)}
-        aria-label="Volume"
-        className="h-3 w-[clamp(5rem,9vw,9rem)] accent-brand"
-      />
-    </div>
+    <input
+      type="range"
+      min={0}
+      max={100}
+      value={muted ? 0 : Math.round(volume * 100)}
+      onChange={(e) => setVolume(Number(e.target.value) / 100)}
+      aria-label="Volume"
+      className="h-3 w-[368px] accent-brand"
+    />
   );
 }
 
@@ -156,10 +141,9 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
   const isLiked = useLikedSongsStore((s) => (track ? s.isLiked(track.videoId) : false));
   const toggleLiked = useLikedSongsStore((s) => s.toggle);
 
-  const loadLyrics = useLyricsStore((s) => s.load);
-  useEffect(() => {
-    if (track) loadLyrics({ videoId: track.videoId, title: track.title, artist: track.subtitle, duration: track.duration });
-  }, [track?.videoId, loadLyrics]);
+  // Lyrics are loaded by `useAudioEngine` on every track change now, not
+  // here — see its comment. Fetching from this component meant a track
+  // only got lyrics if you happened to open the stage for it.
 
   const [scrub, setScrub] = useState<number | null>(null);
   const [chrome, setChrome] = useState(false);

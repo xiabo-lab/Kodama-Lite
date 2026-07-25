@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { dispatch } from "@/bus/bus";
 import { dispatchContent } from "@/lib/network";
+import { useLyricsStore } from "@/store/lyricsStore";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useSettingsStore } from "@/store/settingsStore";
 
@@ -84,6 +85,33 @@ export function useAudioEngine(): void {
     const id = window.setInterval(push, 2000);
     return () => window.clearInterval(id);
   }, [track, playingForMedia, durationForMedia]);
+
+  // ── Lyrics ──────────────────────────────────────────────────────────
+  //
+  // Fetched here, on every track change, rather than from the karaoke
+  // stage. It used to live in `KaraokeStage`, which only mounts while the
+  // overlay is open — so a track you never opened the lyrics for never had
+  // its lyrics fetched or cached, while its audio was cached on the first
+  // play regardless. That's why the cached-audio and cached-lyrics counts
+  // in Settings > Storage drifted apart.
+  //
+  // Doing it here also means the lyrics are already in the store by the
+  // time the stage opens, so `L` shows words instead of "Loading lyrics…".
+  // A cache hit costs nothing: `load()` returns synchronously without
+  // dispatching.
+  const lyricsTrack = usePlaybackStore((s) =>
+    s.index >= 0 ? s.queue[s.index] : undefined,
+  );
+  const loadLyrics = useLyricsStore((s) => s.load);
+  useEffect(() => {
+    if (!lyricsTrack) return;
+    loadLyrics({
+      videoId: lyricsTrack.videoId,
+      title: lyricsTrack.title,
+      artist: lyricsTrack.subtitle,
+      duration: lyricsTrack.duration,
+    });
+  }, [lyricsTrack?.videoId, loadLyrics]);
 
   // ── Radio continuation ──────────────────────────────────────────────
   //

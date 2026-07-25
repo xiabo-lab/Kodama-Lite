@@ -98,34 +98,44 @@ function SourceList({
   return (
     <div
       role="menu"
-      // Eight rows is taller than the Pi's 440px panel has room for above
-      // the player bar, so the list scrolls rather than running off the
-      // top of the screen — measured overflowing by 8px before the cap.
+      // Two columns, 2.5x the old width. At 24px type a single 240px
+      // column wrapped every label and pushed the list past the top of the
+      // Pi's 440px panel, so picking a source meant scrolling a popup with
+      // a fingertip. Eight entries in two columns fit without scrolling at
+      // all — the `max-h` below is now a safety net rather than the plan.
       className={cn(
-        "absolute bottom-full z-50 mb-3 flex max-h-[calc(100vh-8rem)] w-60 flex-col gap-0.5 overflow-y-auto rounded-xl border border-hairline bg-surface-active p-2 shadow-lg backdrop-blur",
+        "absolute bottom-full z-50 mb-3 flex max-h-[calc(100vh-8rem)] w-[600px] max-w-[calc(100vw-2rem)] flex-col gap-0.5 overflow-y-auto rounded-xl border border-hairline bg-surface-active p-2 shadow-lg backdrop-blur",
         align === "right" ? "right-0" : "left-0",
       )}
     >
-      <h3 className="px-2 pb-1 pt-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      {/* Padding and row height are tuned so all eight entries fit inside
+          the 312px this panel gets above the bar on a 440px screen —
+          measured at 333px before the trim, i.e. scrolling by a hair,
+          which is the one thing two columns were meant to avoid. */}
+      <h3 className="px-2 text-xs font-semibold uppercase tracking-wide leading-6 text-muted-foreground">
         Lyrics source
       </h3>
+      {/* Auto spans both columns: it isn't one provider among eight, it's
+          the rule that picks between them. */}
       <SourceRow
         label="Auto"
         detail={status === "loading" ? "Searching…" : "Best available"}
         selected={choice === "auto"}
         onSelect={() => select("auto")}
       />
-      <div className="my-1 h-px bg-hairline" aria-hidden="true" />
-      {SOURCE_ORDER.map((source) => (
-        <SourceRow
-          key={source}
-          label={SOURCE_LABELS[source]}
-          detail={detailFor(sources[source], status)}
-          selected={choice === source}
-          disabled={!sources[source]}
-          onSelect={() => select(source)}
-        />
-      ))}
+      <div className="my-0.5 h-px bg-hairline" aria-hidden="true" />
+      <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+        {SOURCE_ORDER.map((source) => (
+          <SourceRow
+            key={source}
+            label={SOURCE_LABELS[source]}
+            detail={detailFor(sources[source], status)}
+            selected={choice === source}
+            disabled={!sources[source]}
+            onSelect={() => select(source)}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -156,11 +166,15 @@ function SourceRow({
       aria-checked={selected}
       disabled={disabled}
       onClick={onSelect}
-      className="flex items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-white/10 disabled:pointer-events-none disabled:opacity-40"
+      className="flex min-h-11 items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-white/10 disabled:pointer-events-none disabled:opacity-40"
     >
       <span className="min-w-0 flex-1 truncate">{label}</span>
       <span className="shrink-0 text-xs text-muted-foreground">{detail}</span>
-      {selected && <CheckIcon className="size-4 shrink-0 text-brand" />}
+      {/* Reserve the tick's width on every row so selecting one doesn't
+          reflow the column it's in. */}
+      <CheckIcon
+        className={cn("size-4 shrink-0 text-brand", !selected && "invisible")}
+      />
     </button>
   );
 }

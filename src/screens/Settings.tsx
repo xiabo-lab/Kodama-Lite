@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
 import {
   DatabaseIcon,
+  InfoIcon,
   LogInIcon,
   LogOutIcon,
   MicVocalIcon,
   PaletteIcon,
   RadioIcon,
+  RefreshCwIcon,
   RotateCcwIcon,
   TimerIcon,
   Trash2Icon,
   UserRoundIcon,
+  WifiIcon,
+  WifiOffIcon,
 } from "lucide-react";
 import {
   Group,
@@ -18,6 +22,8 @@ import {
   SettingRow,
   Switch,
 } from "@/components/settings/primitives";
+import { dispatch } from "@/bus/bus";
+import { useAppStore } from "@/store/appStore";
 import { useSettingsStore, type ThemeMode } from "@/store/settingsStore";
 import { useAuthStore } from "@/store/authStore";
 import { formatBytes, useCacheStore } from "@/store/cacheStore";
@@ -46,7 +52,59 @@ export function Settings() {
       <PlaybackSection />
       <LyricsTimingSection />
       <StorageSection />
+      <ConnectionSection />
+      <AboutSection />
     </div>
+  );
+}
+
+/**
+ * Connectivity, moved here from the title bar's old dropdown. It's a
+ * status readout with a manual re-check, which is a settings-screen thing
+ * rather than something worth a permanent slot in the chrome.
+ */
+function ConnectionSection() {
+  const online = useAppStore((s) => s.online);
+  return (
+    <>
+      <SectionTitle>Connection</SectionTitle>
+      <Group>
+        <SettingRow
+          icon={online ? WifiIcon : WifiOffIcon}
+          title={online ? "Online" : "Offline"}
+          description={
+            online
+              ? "Reachability is probed with a raw socket, not the OS's “a network exists” flag — so this reflects whether the internet actually answers."
+              : "Cached screens and cached tracks keep working. Anything not already saved will retry once you're back."
+          }
+          control={
+            <button
+              type="button"
+              onClick={() => dispatch({ type: "connectivity:check" })}
+              className="flex min-h-11 shrink-0 items-center gap-2 rounded-md border border-input px-4 text-sm font-medium transition-colors hover:bg-accent"
+            >
+              <RefreshCwIcon className="size-4" />
+              Check now
+            </button>
+          }
+        />
+      </Group>
+    </>
+  );
+}
+
+function AboutSection() {
+  return (
+    <>
+      <SectionTitle>About</SectionTitle>
+      <Group>
+        <SettingRow
+          icon={InfoIcon}
+          title={`Kodama-Lite ${__APP_VERSION__}`}
+          description="A fluid YouTube Music client for the Raspberry Pi 5 in-car display."
+        />
+      </Group>
+    </>
   );
 }
 
