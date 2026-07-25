@@ -1,4 +1,4 @@
-// Ported verbatim from YTMLite.
+// Ported from YTMLite, then extended to keep the per-word timings.
 /**
  * Kugou KRC decoding.
  *
@@ -10,12 +10,18 @@
  *
  * The decoded text is line-level `[start,duration]` tags followed by
  * per-word `<offset,duration,0>text` runs, where the word offset is
- * relative to the line start. The player highlights whole lines, so we
- * flatten to ordinary line-level LRC and let `parseLRC` take it from
- * there rather than emitting per-word tags it would only strip again.
+ * relative to the line start.
+ *
+ * This used to flatten straight to line-level LRC and throw the word runs
+ * away, because the stage highlighted whole lines. It no longer does:
+ * KRC is the only one of the seven sources that carries real word timings,
+ * so those runs are the entire basis for word-level karaoke. They're kept
+ * and normalised to absolute seconds here.
  *
  * Kept free of Tauri/network imports so it can be unit-tested.
  */
+
+import type { TimedLine, TimedWord } from "@/lib/lyrics/types";
 
 const KRC_KEY = new Uint8Array([
   0x40, 0x47, 0x61, 0x77, 0x5e, 0x32, 0x74, 0x47, 0x51, 0x36, 0x31, 0x2d,
@@ -25,23 +31,14 @@ const KRC_KEY = new Uint8Array([
 const LINE_RE = /^\[(\d+),(\d+)\](.*)$/;
 const WORD_RE = /<(\d+),(\d+),\d+>([^<]*)/g;
 
-/** Format milliseconds as an LRC timestamp, `[mm:ss.cc]`. */
-export function formatLrcTimestamp(ms: number): string {
-  const mm = Math.floor(ms / 60_000);
-  const ss = Math.floor((ms % 60_000) / 1000);
-  const cs = Math.floor((ms % 1000) / 10);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `[${pad(mm)}:${pad(ss)}.${pad(cs)}]`;
-}
-
 /**
- * Decrypt a base64 KRC blob and flatten it to line-level LRC.
+ * Decrypt a base64 KRC blob into timed lines with per-word timings.
  * Returns null for anything that isn't a valid, timed KRC — an empty
  * blob, a bad magic, a failed inflate, or text with no timed lines.
  */
-export async function krcToLrc(b64: string): Promise<string | null> {
+export async function krcToLines(b64: string): Promise<TimedLine[] | null> {
   const decrypted = await decryptKrc(b64);
-  return decrypted ? krcTextToLrc(decrypted) : null;
+  return decrypted ? krcTextToLines(decrypted) : null;
 }
 
 async function decryptKrc(b64: string): Promise<string | null> {
@@ -93,22 +90,51 @@ async function inflate(data: Uint8Array): Promise<string> {
 }
 
 /**
- * Flatten decrypted KRC text to line-level LRC. Metadata lines
- * (`[ti:…]`, `[language:…]`, …) carry no `[start,duration]` tag and are
- * skipped.
+ * Parse decrypted KRC text into timed lines.
+ *
+ * Metadata lines (`[ti:…]`, `[language:…]`, …) carry no
+ * `[start,duration]` tag and are skipped. A line whose word runs are all
+ * empty contributes no text and is dropped, matching the old behaviour.
  */
-export function krcTextToLrc(krc: string): string | null {
-  const out: string[] = [];
+export function krcTextToLines(krc: string): TimedLine[] | null {
+  const out: TimedLine[] = [];
   for (const raw of krc.split(/\r?\n/)) {
     const m = LINE_RE.exec(raw);
     if (!m) continue;
-    const lineStart = Number(m[1]);
-    if (!Number.isFinite(lineStart)) continue;
+    const lineStartMs = Number(m[1]);
+    const lineDurMs = Number(m[2]);
+    if (!Number.isFinite(lineStartMs)) continue;
+
+    const words: TimedWord[] = [];
     let text = "";
-    for (const w of m[3].matchAll(WORD_RE)) text += w[3];
-    text = text.trim();
-    if (!text) continue;
-    out.push(formatLrcTimestamp(lineStart) + text);
+    for (const w of m[3].matchAll(WORD_RE)) {
+      const offMs = Number(w[1]);
+      const durMs = Number(w[2]);
+      const chunk = w[3];
+      text += chunk;
+      // Whitespace-only runs are kept, not skipped: the renderer draws the
+      // line *from* this list, so dropping them would delete the spaces
+      // between Latin words. An invisible run simply lights up invisibly.
+      if (!Number.isFinite(offMs) || !Number.isFinite(durMs)) continue;
+      words.push({
+        start: (lineStartMs + offMs) / 1000,
+        end: (lineStartMs + offMs + durMs) / 1000,
+        text: chunk,
+      });
+    }
+
+    if (!text.trim()) continue;
+
+    out.push({
+      start: lineStartMs / 1000,
+      end: Number.isFinite(lineDurMs)
+        ? (lineStartMs + lineDurMs) / 1000
+        : undefined,
+      text,
+      words: words.length > 0 ? words : undefined,
+    });
   }
-  return out.length > 0 ? out.join("\n") : null;
+  if (out.length === 0) return null;
+  out.sort((a, b) => a.start - b.start);
+  return out;
 }

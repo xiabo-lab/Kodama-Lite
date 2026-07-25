@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLyricsStore } from "@/store/lyricsStore";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useSettingsStore } from "@/store/settingsStore";
-import type { TimedLine } from "@/lib/lyrics/types";
+import type { Lyrics, TimedLine, TimedWord } from "@/lib/lyrics/types";
+import { canEstimate, estimateTimedLines } from "@/lib/lyrics/estimate";
 import { cn } from "@/lib/utils";
 
 /**
@@ -21,22 +22,58 @@ export type LyricsDisplay = "panel" | "stage";
  *  an exact line count, and both halves of that math must agree. */
 export const STAGE_LEADING = 1.3;
 
+/**
+ * What the views should actually render for a given lyric result.
+ *
+ * `plain` lyrics become `timed` when the track's duration is known, by
+ * interpolation — see `estimate.ts` for why a rough moving sheet beats an
+ * exact frozen one, and `estimated` for how that's disclosed. Exported
+ * because the karaoke stage sizes its viewport differently for a
+ * line-highlighted sheet than for a static block of text, and the two
+ * must agree on which one is being shown.
+ */
+export function resolveDisplayLyrics(
+  lyrics: Lyrics | null,
+  duration: number,
+): Lyrics | null {
+  if (!lyrics || lyrics.kind === "timed") return lyrics;
+  if (!canEstimate(lyrics.text, duration)) return lyrics;
+  const lines = estimateTimedLines(lyrics.text, duration);
+  if (lines.length === 0) return lyrics;
+  return { kind: "timed", lines, source: lyrics.source, estimated: true };
+}
+
+/** The stage's own hook version, so both it and `LyricsBody` derive the
+ *  same answer from the same two subscriptions. */
+export function useDisplayLyrics(): Lyrics | null {
+  const lyrics = useLyricsStore((s) => s.lyrics);
+  const duration = usePlaybackStore((s) => s.duration);
+  return useMemo(() => resolveDisplayLyrics(lyrics, duration), [lyrics, duration]);
+}
+
 export function LyricsBody({ display = "panel" }: { display?: LyricsDisplay }) {
   const status = useLyricsStore((s) => s.status);
-  const lyrics = useLyricsStore((s) => s.lyrics);
+  const rawLyrics = useLyricsStore((s) => s.lyrics);
+  const lyrics = useDisplayLyrics();
   const hasTrack = usePlaybackStore((s) => s.index >= 0);
 
   if (!hasTrack) return null;
   const notice = display === "stage" ? "text-center text-2xl text-muted-foreground" : "px-4 py-2 text-sm text-muted-foreground";
 
-  if (status === "loading" && !lyrics) {
+  if (status === "loading" && !rawLyrics) {
     return <p className={notice}>Loading lyrics…</p>;
   }
   if (!lyrics) {
     return <p className={notice}>No lyrics found.</p>;
   }
   if (lyrics.kind === "timed") {
-    return <TimedLyrics lines={lyrics.lines} display={display} />;
+    return (
+      <TimedLyrics
+        lines={lyrics.lines}
+        display={display}
+        estimated={lyrics.estimated}
+      />
+    );
   }
   return <PlainLyrics text={lyrics.text} display={display} />;
 }
@@ -75,7 +112,95 @@ function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-function TimedLyrics({ lines, display = "panel" }: { lines: TimedLine[]; display?: LyricsDisplay }) {
+/** How many of `words` have started by `t`. */
+function countSung(words: TimedWord[], t: number): number {
+  let n = 0;
+  while (n < words.length && words[n].start <= t) n++;
+  return n;
+}
+
+/**
+ * Do this line's words actually reconstruct its text?
+ *
+ * The three parsers that produce `words` (Kugou KRC, Enhanced LRC, and
+ * the estimator) each have edge cases where a run could be dropped —
+ * text before the first tag, a malformed timestamp. Drawing the line from
+ * a word list that doesn't add up would silently mangle the lyric, so the
+ * renderer checks first and falls back to whole-line highlighting. A
+ * missing highlight is a far smaller failure than missing words.
+ */
+function wordsUsable(line: TimedLine): boolean {
+  if (!line.words || line.words.length === 0) return false;
+  return line.words.map((w) => w.text).join("").trim() === line.text.trim();
+}
+
+/**
+ * How many words of the active line have been sung.
+ *
+ * `position` in the store is driven by the audio element's `timeupdate`,
+ * which fires roughly four times a second — far too coarse for word-level
+ * highlighting, where CJK characters can be 200ms apart. This interpolates
+ * between those ticks against a wall clock and resyncs on every real one,
+ * so the highlight advances smoothly without the playback store having to
+ * run at frame rate.
+ *
+ * `setCount` is called with the same value on most frames, which React
+ * bails out of, so this re-renders about once per word rather than once
+ * per frame — and only ever the single active line, never the sheet.
+ */
+function useSungWordCount(words: TimedWord[], offsetSec: number): number {
+  const storePosition = usePlaybackStore((s) => s.position);
+  const playing = usePlaybackStore((s) => s.playing);
+  const [count, setCount] = useState(() =>
+    countSung(words, storePosition - offsetSec),
+  );
+
+  useEffect(() => {
+    const startedAt = performance.now();
+    const apply = (elapsed: number) =>
+      setCount(countSung(words, storePosition + elapsed - offsetSec));
+    apply(0);
+    // Paused: the clock isn't moving, so one computation is the whole job.
+    if (!playing) return;
+    let raf = requestAnimationFrame(function tick() {
+      apply((performance.now() - startedAt) / 1000);
+      raf = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [words, storePosition, playing, offsetSec]);
+
+  return count;
+}
+
+/** The active line, drawn word by word. */
+function WordLine({ words, offsetSec }: { words: TimedWord[]; offsetSec: number }) {
+  const sung = useSungWordCount(words, offsetSec);
+  return (
+    <>
+      {words.map((w, i) => (
+        <span
+          key={i}
+          className={cn(
+            "transition-colors duration-200 ease-out",
+            i < sung ? "text-foreground" : "text-foreground/30",
+          )}
+        >
+          {w.text}
+        </span>
+      ))}
+    </>
+  );
+}
+
+function TimedLyrics({
+  lines,
+  display = "panel",
+  estimated,
+}: {
+  lines: TimedLine[];
+  display?: LyricsDisplay;
+  estimated?: boolean;
+}) {
   const stage = display === "stage";
   const scrollRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
@@ -149,6 +274,15 @@ function TimedLyrics({ lines, display = "panel" }: { lines: TimedLine[]; display
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
+      {/* Panel only. The stage has no vertical room to spare on a 440px
+          panel, so it discloses this in its chrome band instead — see
+          `karaoke-view.tsx`. */}
+      {estimated && !stage ? (
+        <p className="shrink-0 px-2 pb-1 text-xs text-muted-foreground">
+          Estimated timing — no synced lyrics were found, so these are
+          spread across the track's length.
+        </p>
+      ) : null}
       <div
         ref={scrollRef}
         className={cn(
@@ -160,6 +294,10 @@ function TimedLyrics({ lines, display = "panel" }: { lines: TimedLine[]; display
         {lines.map((line, i) => {
           const isActive = i === activeIdx;
           const isPast = i < activeIdx;
+          // Only the active line is drawn word by word — the others have
+          // nothing to reveal, and giving each its own rAF clock would put
+          // the whole sheet on a frame-rate render loop.
+          const byWord = isActive && wordsUsable(line);
           return (
             <button
               key={i}
@@ -179,7 +317,11 @@ function TimedLyrics({ lines, display = "panel" }: { lines: TimedLine[]; display
                     : "scale-100 text-muted-foreground/70",
               )}
             >
-              {line.text || "♪"}
+              {byWord ? (
+                <WordLine words={line.words!} offsetSec={offset} />
+              ) : (
+                line.text || "♪"
+              )}
             </button>
           );
         })}

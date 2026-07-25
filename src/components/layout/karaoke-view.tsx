@@ -15,7 +15,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
 import { useLikedSongsStore } from "@/store/likedSongsStore";
-import { LyricsBody, STAGE_LEADING } from "@/components/layout/lyrics-view";
+import { LyricsBody, STAGE_LEADING, useDisplayLyrics } from "@/components/layout/lyrics-view";
 import { LyricsSourceButton } from "@/components/layout/lyrics-source-picker";
 import { QueueButton, QueuePanel } from "@/components/layout/queue-panel";
 import { useQueuePanelStore } from "@/store/queuePanelStore";
@@ -155,6 +155,16 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
   const [sourceOpen, setSourceOpen] = useState(false);
   const panelOpen = queueOpen || sourceOpen;
 
+  // The lyric viewport is capped to exactly three big lines so the active
+  // one sits at the top with its two successors below. That only makes
+  // sense for a sheet that highlights and scrolls itself: an unsynced
+  // transcript has no active line, so the same cap left it frozen on the
+  // first three lines for the whole song with the scrollbar hidden. Plain
+  // text now gets the full height instead.
+  const displayLyrics = useDisplayLyrics();
+  const lineHighlighted = displayLyrics?.kind === "timed";
+  const estimatedTiming = displayLyrics?.kind === "timed" && displayLyrics.estimated;
+
   const [scrub, setScrub] = useState<number | null>(null);
   const [chrome, setChrome] = useState(false);
   const hideRef = useRef<number | null>(null);
@@ -213,6 +223,14 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
           {track?.subtitle ? (
             <span className="min-w-0 truncate text-[clamp(0.85rem,2.4vh,1.125rem)] text-muted-foreground">— {track.subtitle}</span>
           ) : null}
+          {/* Disclosed here rather than over the lyrics: this band is what
+              you reveal when you tap to ask what's going on, and the stage
+              has no spare vertical room on a 440px panel. */}
+          {estimatedTiming ? (
+            <span className="shrink-0 whitespace-nowrap text-[clamp(0.75rem,2.1vh,1rem)] text-brand">
+              · estimated timing
+            </span>
+          ) : null}
         </div>
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <span className="w-12 shrink-0 text-right text-sm tabular-nums text-muted-foreground">{formatTime(shownPosition)}</span>
@@ -259,7 +277,11 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
       >
         <div
           className="w-full overflow-hidden"
-          style={{ height: `calc(${STAGE_LINES} * ${STAGE_LEADING} * var(--lyric-font) + ${STAGE_LINES - 1} * var(--lyric-gap))` }}
+          style={
+            lineHighlighted
+              ? { height: `calc(${STAGE_LINES} * ${STAGE_LEADING} * var(--lyric-font) + ${STAGE_LINES - 1} * var(--lyric-gap))` }
+              : { height: "100%" }
+          }
         >
           <LyricsBody display="stage" />
         </div>

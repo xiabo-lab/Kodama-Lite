@@ -4,7 +4,7 @@ import type { Lyrics } from "@/lib/lyrics/types";
 import { parseLRC } from "@/lib/lyrics/parse-lrc";
 import { hitMatches, normalizeForMatch } from "@/lib/lyrics/match";
 import type { CnLyricsParams } from "@/lib/lyrics/netease";
-import { krcToLrc } from "@/lib/lyrics/krc";
+import { krcToLines } from "@/lib/lyrics/krc";
 
 /**
  * Kugou (酷狗音乐) — third of the Chinese-language sources; see
@@ -58,7 +58,13 @@ export async function fetchKugouLyrics(
   const candidate = await findLyricCandidate(song.hash);
   if (!candidate) return null;
 
-  const lrc = await downloadLyric(candidate);
+  // KRC first: better coverage than Kugou's plain LRC, and the only
+  // format among the seven sources that carries per-word timings — which
+  // is what makes word-level karaoke possible at all.
+  const krcLines = await downloadKrcLines(candidate);
+  if (krcLines) return { kind: "timed", lines: krcLines, source: "Kugou" };
+
+  const lrc = await downloadPlainLrc(candidate);
   if (!lrc) return null;
 
   const lines = parseLRC(lrc);
@@ -129,21 +135,21 @@ async function download(
   return data.content ?? "";
 }
 
-async function downloadLyric(c: KugouCandidate): Promise<string | null> {
-  // KRC first: better coverage than Kugou's plain LRC. A track without
-  // one answers with an empty or undecryptable blob, which `krcToLrc`
-  // rejects, so we simply fall through.
+/** The word-timed leg. A track without a KRC answers with an empty or
+ *  undecryptable blob, which `krcToLines` rejects — the caller then falls
+ *  through to plain LRC, which is a complete substitute apart from the
+ *  word timings. Network/parse trouble here alone must not lose the
+ *  track, hence the swallow. */
+async function downloadKrcLines(c: KugouCandidate) {
   try {
     const krc = await download(c, "krc");
-    if (krc) {
-      const converted = await krcToLrc(krc);
-      if (converted) return converted;
-    }
+    return krc ? await krcToLines(krc) : null;
   } catch {
-    // Network/parse trouble on the KRC leg alone shouldn't lose the
-    // track — the plain LRC below is a complete substitute.
+    return null;
   }
+}
 
+async function downloadPlainLrc(c: KugouCandidate): Promise<string | null> {
   const content = await download(c, "lrc");
   if (!content) return null;
   const lrc = decodeBase64Utf8(content);
