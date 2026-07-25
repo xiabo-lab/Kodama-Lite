@@ -31,7 +31,11 @@
 set -uo pipefail
 
 FIX=0
-[ "${1:-}" = "--fix" ] && FIX=1
+NO_XQ=0
+case "${1:-}" in
+  --fix)       FIX=1 ;;
+  --no-sbc-xq) NO_XQ=1 ;;
+esac
 
 log()  { printf '\n\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m !!\033[0m %s\n' "$*"; }
@@ -310,7 +314,61 @@ fi
 
 # ── 5. Load ───────────────────────────────────────────────────────────
 
+# ── 6. Codec actually in use ──────────────────────────────────────────
+#
+# Readable without pactl: wpctl can dump a node's properties, and the
+# bluez5 sink carries the negotiated codec among them.
+
+log "Negotiated codec"
+if [ "$have_wpctl" -eq 1 ]; then
+  bt_id=$(wpctl status 2>/dev/null \
+          | sed -n '/Sinks:/,/Sources:/p' \
+          | grep -iE 'bluez|BT20A|Fosi' \
+          | grep -oE '[0-9]+\.' | head -1 | tr -d '.')
+  if [ -n "$bt_id" ]; then
+    codec=$(wpctl inspect "$bt_id" 2>/dev/null \
+            | grep -iE 'bluez5.codec|api.bluez5.codec' | head -1 | sed 's/.*= *//' | tr -d '"')
+    lat=$(wpctl inspect "$bt_id" 2>/dev/null \
+          | grep -iE 'node.latency' | head -1 | sed 's/.*= *//' | tr -d '"')
+    ok "Codec: ${codec:-not reported}"
+    ok "Node latency: ${lat:-default}"
+    if [ "${codec:-}" = "sbc" ]; then
+      hint "Plain 'sbc' rather than 'sbc_xq' means the XQ config has not taken"
+      hint "effect — the codec is negotiated at connect time, so DISCONNECT"
+      hint "and RECONNECT the speaker after any config change."
+    fi
+  else
+    warn "Couldn't identify the Bluetooth sink id."
+  fi
+fi
+
+# ── 7. CPU governor ───────────────────────────────────────────────────
+
+log "CPU governor"
+gov_file=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+if [ -r "$gov_file" ]; then
+  gov=$(cat "$gov_file")
+  if [ "$gov" = "performance" ]; then
+    ok "performance"
+  else
+    warn "Governor is '$gov'. Ramp-up lag can cause audio dropouts."
+    if [ "$FIX" -eq 1 ]; then
+      if echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null 2>&1; then
+        ok "Set to performance for this boot."
+        hint "Persist with: sudo apt install -y cpufrequtils"
+        hint "  then set GOVERNOR=\"performance\" in /etc/default/cpufrequtils"
+      fi
+    else
+      hint "Try: echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor"
+    fi
+  fi
+else
+  hint "No cpufreq governor exposed; skipping."
+fi
+
 log "System load (audio dropouts can just be a busy CPU)"
+hint "NOTE: this is meaningful only while a track is PLAYING. Idle load"
+hint "says nothing about whether decode + Bluetooth is keeping up."
 uptime | sed 's/^/  /'
 if command -v vcgencmd >/dev/null; then
   thr=$(vcgencmd get_throttled 2>/dev/null)
@@ -322,9 +380,93 @@ if command -v vcgencmd >/dev/null; then
   fi
 fi
 
+# ── 8. Buffering ──────────────────────────────────────────────────────
+#
+# The fix when everything above is clean and audio *still* breaks up only
+# over Bluetooth. A2DP is a lossy radio link with variable delivery; if
+# PipeWire's buffer is sized for a wired sink, every retransmit becomes an
+# underrun. A bigger buffer rides over them.
+#
+# The cost is latency — roughly quantum/48000 seconds per buffer, so 2048
+# is ~43ms. For a car stereo that is irrelevant (nothing is lip-syncing to
+# it); for anything interactive it would not be.
+#
+# This is set globally rather than per-device on purpose: a per-node
+# WirePlumber rule needs property names that differ between versions, and
+# silently writing config that does nothing is a mistake this script has
+# already made once.
+
+PW_DIR="$HOME/.config/pipewire/pipewire.conf.d"
+PW_CONF="$PW_DIR/10-bluetooth-latency.conf"
+
+log "Audio buffer size"
+if [ -f "$PW_CONF" ]; then
+  ok "Larger-buffer config present: $PW_CONF"
+  hint "If audio is now smooth but noticeably DELAYED, lower the quantum"
+  hint "values in that file, or delete it to go back to the default."
+else
+  warn "Default buffer size — small for a Bluetooth link."
+  if [ "$FIX" -eq 1 ]; then
+    mkdir -p "$PW_DIR"
+    cat > "$PW_CONF" <<'CONF'
+# Larger audio buffers, to ride over Bluetooth retransmits.
+#
+# A2DP delivery is variable; a buffer sized for a wired sink underruns on
+# every hiccup, which is heard as stuttering. ~43ms per buffer at 48kHz.
+# Delete this file to return to PipeWire's defaults.
+context.properties = {
+  default.clock.quantum     = 2048
+  default.clock.min-quantum = 1024
+  default.clock.max-quantum = 8192
+}
+CONF
+    ok "Wrote $PW_CONF"
+    systemctl --user restart pipewire pipewire-pulse wireplumber 2>/dev/null \
+      && ok "Restarted the audio stack." \
+      || hint "Restart it: systemctl --user restart pipewire pipewire-pulse wireplumber"
+  else
+    hint "Fix: rerun with --fix to write $PW_CONF"
+  fi
+fi
+
+# ── 9. Link quality ───────────────────────────────────────────────────
+
+log "Bluetooth link"
+mac=$(bluetoothctl devices Connected 2>/dev/null | awk '/Fosi|BT20A/ {print $2; exit}')
+[ -z "$mac" ] && mac=$(bluetoothctl devices Connected 2>/dev/null | awk '{print $2; exit}')
+if [ -n "$mac" ]; then
+  ok "Connected device: $mac"
+  rssi=$(bluetoothctl info "$mac" 2>/dev/null | grep -iE 'RSSI|TxPower' | sed 's/^\s*/  /')
+  [ -n "$rssi" ] && printf '%s\n' "$rssi"
+  hint "Bluetooth is 2.4GHz regardless of which band your WiFi uses, so it"
+  hint "still shares air with every neighbouring 2.4GHz network. Distance and"
+  hint "obstructions matter: test with the Pi and the BT20A close together and"
+  hint "line-of-sight. If that alone fixes it, the link is marginal and the"
+  hint "durable fix is a USB Bluetooth adapter with a real antenna — the Pi 5's"
+  hint "onboard radio shares one small trace antenna with WiFi."
+else
+  warn "No connected Bluetooth device found."
+fi
+
+# ── Revert path ───────────────────────────────────────────────────────
+
+if [ "$NO_XQ" -eq 1 ]; then
+  log "Reverting SBC-XQ"
+  removed=0
+  for f in "$HOME/.config/wireplumber/wireplumber.conf.d/51-bluez-quality.conf" \
+           "$HOME/.config/wireplumber/bluetooth.lua.d/51-bluez-quality.lua"; do
+    [ -f "$f" ] && rm -f "$f" && ok "Removed $f" && removed=1
+  done
+  [ "$removed" -eq 0 ] && ok "Nothing to remove."
+  systemctl --user restart wireplumber 2>/dev/null && ok "Restarted wireplumber."
+  hint "Now disconnect and reconnect the speaker, then listen again."
+  hint "XQ roughly doubles SBC's bitrate: better on a healthy link, worse on"
+  hint "a marginal one. This tells you which yours is."
+fi
+
 log "Done"
-if [ "$FIX" -eq 0 ]; then
+if [ "$FIX" -eq 0 ] && [ "$NO_XQ" -eq 0 ]; then
   hint "This run changed nothing. Rerun with --fix to apply the safe fixes."
 fi
-hint "If the WiFi band came back 2.4GHz, fix that FIRST — the rest is noise"
-hint "next to antenna contention."
+hint "Remember: any codec change needs a DISCONNECT + RECONNECT of the"
+hint "speaker to take effect — it is negotiated at link setup."
