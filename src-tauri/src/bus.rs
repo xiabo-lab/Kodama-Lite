@@ -45,5 +45,6 @@ pub async fn handle_command(app: AppHandle, command: Command) {
         Command::MediaClear => subsystems::media::clear(&app),
         Command::CacheStats => subsystems::cache::stats(&app),
         Command::CacheClear => subsystems::cache::clear(&app),
+        Command::AppQuit => subsystems::quit(&app),
     }
 }

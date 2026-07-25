@@ -6,6 +6,7 @@ import {
   LogOutIcon,
   MicVocalIcon,
   PaletteIcon,
+  PowerIcon,
   RadioIcon,
   RefreshCwIcon,
   RotateCcwIcon,
@@ -28,6 +29,7 @@ import { useSettingsStore, type ThemeMode } from "@/store/settingsStore";
 import { useAuthStore } from "@/store/authStore";
 import { formatBytes, useCacheStore } from "@/store/cacheStore";
 import { clearLyricsCache, lyricsCacheStats } from "@/store/lyricsStore";
+import { cn } from "@/lib/utils";
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: "light", label: "Light" },
@@ -46,6 +48,7 @@ const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
 export function Settings() {
   return (
     <div className="flex flex-col gap-2 px-6 pb-6 pt-2">
+      <QuitSection />
       <AccountSection />
       <AppearanceSection />
       <PlaybackSection />
@@ -54,6 +57,62 @@ export function Settings() {
       <ConnectionSection />
       <AboutSection />
     </div>
+  );
+}
+
+/**
+ * Quit — the first row of the screen, because it's the one thing you come
+ * here for that isn't a preference. The Pi runs this full-screen with no
+ * window chrome and nothing behind it, so before this row the only way out
+ * was an SSH session.
+ *
+ * Armed in two taps rather than one. Everything else on this screen is
+ * reversible in a tap; this ends the session and stops the music, and the
+ * screen it lives on is driven by a fingertip in a moving car. The armed
+ * state expires by itself after 4s so a half-press never leaves a live
+ * trigger sitting under the next stray touch.
+ */
+function QuitSection() {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const id = window.setTimeout(() => setArmed(false), 4000);
+    return () => window.clearTimeout(id);
+  }, [armed]);
+
+  return (
+    <>
+      <SectionTitle>Power</SectionTitle>
+      <Group>
+        <SettingRow
+          icon={PowerIcon}
+          title="Quit Kodama-Lite"
+          description={
+            armed
+              ? "Tap again to close the app. Playback stops immediately."
+              : "Close the app. Playback stops; the queue and everything cached come back on the next launch."
+          }
+          control={
+            <button
+              type="button"
+              onClick={() =>
+                armed ? dispatch({ type: "app:quit" }) : setArmed(true)
+              }
+              className={cn(
+                "flex min-h-11 shrink-0 items-center gap-2 rounded-md px-4 text-sm font-medium transition-colors",
+                armed
+                  ? "bg-brand text-white hover:bg-brand/90"
+                  : "border border-input hover:bg-accent",
+              )}
+            >
+              <PowerIcon className="size-4" />
+              {armed ? "Confirm quit" : "Quit"}
+            </button>
+          }
+        />
+      </Group>
+    </>
   );
 }
 
@@ -197,7 +256,7 @@ function PlaybackSection() {
         <SettingRow
           icon={RotateCcwIcon}
           title="Resume on startup"
-          description="When the app launches, start playing the last track again — from the beginning, not from where it was interrupted. Built for the Pi, which boots straight into this app."
+          description="When the app launches, start playing the last track again — from the beginning, not from where it was interrupted. It waits for the internet to actually answer first, so a car that starts before the hotspot does still ends up playing. Built for the Pi, which boots straight into this app."
           control={
             <Switch
               checked={resumeOnStartup}

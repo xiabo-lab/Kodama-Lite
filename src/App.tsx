@@ -68,5 +68,59 @@ export default function App() {
     };
   }, [applyEvents, applyContentEvents]);
 
+  useOfflineRetry();
+
   return <AppShell />;
+}
+
+/** How often to re-probe while offline. Long enough that a car parked in a
+ *  basement isn't opening a socket every second, short enough that pulling
+ *  out of one feels immediate. */
+const OFFLINE_RETRY_MS = 5000;
+
+/**
+ * Keep asking while the answer is "offline".
+ *
+ * The connectivity subsystem answers on demand and never volunteers a
+ * transition, so before this the single boot-time probe was the whole
+ * story: a Pi that powers on with the ignition and loses the race to the
+ * phone's hotspot — the normal case, not an edge one — stayed marked
+ * offline for the entire drive, with the banner up and resume-on-startup
+ * never firing, until someone found Settings and pressed "Check now".
+ *
+ * Deliberately a `subscribe` rather than a `useAppStore(...)` selector:
+ * this component's only child is the entire app, so re-rendering it on a
+ * connectivity flip would reconcile the whole tree for a boolean that four
+ * leaf components already read for themselves.
+ */
+function useOfflineRetry(): void {
+  useEffect(() => {
+    let timer: number | undefined;
+
+    const sync = (online: boolean) => {
+      if (online) {
+        if (timer !== undefined) {
+          window.clearInterval(timer);
+          timer = undefined;
+        }
+        return;
+      }
+      if (timer === undefined) {
+        timer = window.setInterval(
+          () => dispatch({ type: "connectivity:check" }),
+          OFFLINE_RETRY_MS,
+        );
+      }
+    };
+
+    sync(useAppStore.getState().online);
+    const unsubscribe = useAppStore.subscribe((s, prev) => {
+      if (s.online !== prev.online) sync(s.online);
+    });
+
+    return () => {
+      unsubscribe();
+      if (timer !== undefined) window.clearInterval(timer);
+    };
+  }, []);
 }

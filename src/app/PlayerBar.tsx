@@ -1,7 +1,6 @@
 import { useRef } from "react";
 import {
   Loader2Icon,
-  Maximize2Icon,
   PauseIcon,
   PlayIcon,
   Repeat1Icon,
@@ -48,7 +47,6 @@ export function PlayerBar() {
   const setVolume = usePlaybackStore((s) => s.setVolume);
   const setShuffle = usePlaybackStore((s) => s.setShuffle);
   const cycleRepeat = usePlaybackStore((s) => s.cycleRepeat);
-  const setKaraokeOpen = useKaraokeStore((s) => s.setOpen);
   const karaokeOpen = useKaraokeStore((s) => s.open);
 
   const track = index >= 0 ? queue[index] : undefined;
@@ -176,18 +174,10 @@ export function PlayerBar() {
               <RepeatIcon className="size-10" />
             )}
           </button>
-          <button
-            className={ICON_BTN}
-            aria-label="Full-screen lyrics"
-            disabled={!hasTrack}
-            onClick={() => setKaraokeOpen(true)}
-          >
-            <Maximize2Icon className="size-10" />
-          </button>
-          {/* The mic is the lyrics-*source* picker, not a second way into
-              the karaoke stage — the expand icon to its left is that, and
-              having both open the same overlay made one of them dead
-              weight. */}
+          {/* The mic is the lyrics-*source* picker, not a way into the
+              karaoke stage. That's the top-right corner button now (see
+              `TopBar`) — a corner is a far better touch target than a
+              40px icon wedged between Repeat and this one. */}
           <LyricsSourceButton
             className={cn(ICON_BTN, "[&_svg]:size-10")}
             disabled={!hasTrack}

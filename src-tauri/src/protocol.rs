@@ -61,6 +61,10 @@ pub enum Command {
     CacheStats,
     #[serde(rename = "cache:clear")]
     CacheClear,
+    /// Close the app — the Pi runs it full-screen with no desktop chrome,
+    /// so the Settings screen's Quit row is the only way out.
+    #[serde(rename = "app:quit")]
+    AppQuit,
 }
 
 // ── Events: data plane → view plane ───────────────────────────────────

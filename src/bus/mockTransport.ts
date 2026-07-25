@@ -103,6 +103,12 @@ export function createMockTransport(): Transport {
             80,
           );
           break;
+        case "app:quit":
+          // A browser tab can't close itself unless script opened it, and
+          // faking it (blanking the page) would make the Quit row look
+          // like it worked somewhere it can't. Left visibly inert instead.
+          console.warn("[mock] app:quit — no app to quit in a browser tab");
+          break;
         case "auth:signIn":
           // Deliberately NOT faked. Signing in means reading HttpOnly
           // cookies out of a real webview's cookie store (see

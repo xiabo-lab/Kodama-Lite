@@ -27,8 +27,11 @@ interface SettingsState {
    *  negative one pushes them ahead. Consumed in `lyrics-view.tsx`. */
   lyricsOffsetSec: number;
   /** Auto-play the last-played track when the app launches, from its
-   *  beginning rather than where it was interrupted. Aimed at the in-car
-   *  Pi, which boots straight into the app. */
+   *  beginning rather than where it was interrupted. On by default: the
+   *  Pi boots straight into this app when the car starts, and the point
+   *  of that is music, not a play button waiting to be found. Waits for a
+   *  confirmed internet connection, not just for the app to mount — see
+   *  `audioEngine.ts`. */
   resumeOnStartup: boolean;
   /** Keep playing past the end of the queue with tracks similar to the
    *  last one — the behaviour the YouTube Music app has, where starting
@@ -48,7 +51,7 @@ export const useSettingsStore = create<SettingsState>()(
     (set) => ({
       theme: "dark",
       lyricsOffsetSec: 0,
-      resumeOnStartup: false,
+      resumeOnStartup: true,
       autoRadio: true,
       setTheme: (theme) => set({ theme }),
       // Clamp to ±3.0s and snap to 0.1s so persisted values and any
@@ -60,6 +63,19 @@ export const useSettingsStore = create<SettingsState>()(
       setResumeOnStartup: (resumeOnStartup) => set({ resumeOnStartup }),
       setAutoRadio: (autoRadio) => set({ autoRadio }),
     }),
-    { name: "kl:settings" },
+    {
+      name: "kl:settings",
+      // v1 turns `resumeOnStartup` on. A default change alone would only
+      // reach fresh installs — every device that has ever opened Settings
+      // has the old `false` written to disk, including the Pi this is
+      // built for. The migration adopts the new default once; turning it
+      // back off in Settings sticks, because that write lands at v1.
+      version: 1,
+      migrate: (persisted, version) => {
+        const s = persisted as Partial<SettingsState>;
+        if (version < 1) return { ...s, resumeOnStartup: true };
+        return s;
+      },
+    },
   ),
 );

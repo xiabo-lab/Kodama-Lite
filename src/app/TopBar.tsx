@@ -2,12 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
+  Maximize2Icon,
   MaximizeIcon,
   MinimizeIcon,
   PanelLeftIcon,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "@/store/appStore";
+import { usePlaybackStore } from "@/store/playbackStore";
+import { useKaraokeStore } from "@/store/karaokeStore";
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,6 +23,9 @@ import { cn } from "@/lib/utils";
  * kept in step with the real one. Now "…" simply goes to Settings, and the
  * two things worth reaching in one tap (full screen, sidebar) are buttons
  * in their own right.
+ *
+ * The karaoke stage is opened from the top-right corner (see
+ * `KaraokeCornerButton`), not from the player bar's icon row.
  */
 const NAV_BTN =
   "flex size-14 items-center justify-center rounded-md text-foreground/65 transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-7";
@@ -66,7 +72,39 @@ export function TopBar() {
         </button>
       </div>
       <div className="h-full flex-1" />
+      <KaraokeCornerButton />
     </header>
+  );
+}
+
+/**
+ * Full-screen karaoke, in the top-right corner — the one screen you reach
+ * for while driving, so it gets the corner: the easiest target on a touch
+ * panel to hit without looking, because two edges stop your finger for you.
+ * It used to be a 40px icon in the player bar's transport row, wedged
+ * between Repeat and the lyrics-source mic, where it was both the hardest
+ * of the eight to pick out and easy to mis-tap into Repeat.
+ *
+ * The button is deliberately much larger than its icon: 160x60, flush to
+ * the top and right edges with no margin or rounding on that side, so the
+ * literal corner pixel is inside the hit box and an over-shot tap still
+ * lands. The icon sits inset from the edge for looks; the padding around
+ * it is all target.
+ */
+function KaraokeCornerButton() {
+  const hasTrack = usePlaybackStore((s) => s.index >= 0);
+  const setKaraokeOpen = useKaraokeStore((s) => s.setOpen);
+
+  return (
+    <button
+      type="button"
+      aria-label="Full-screen lyrics"
+      disabled={!hasTrack}
+      onClick={() => setKaraokeOpen(true)}
+      className="flex h-full w-40 shrink-0 items-center justify-end self-stretch rounded-bl-md pr-6 text-foreground/65 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+    >
+      <Maximize2Icon className="size-9" />
+    </button>
   );
 }
 

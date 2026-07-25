@@ -30,3 +30,12 @@ pub fn ping(app: &AppHandle) {
         emit(&app, AppEvent::Pong { ts });
     });
 }
+
+/// Quit. Synchronous and terminal by design — `exit` runs Tauri's normal
+/// shutdown (windows closed, `RunEvent::Exit` delivered) rather than
+/// `process::abort`, so the stream server's temp files still get cleaned
+/// up. There is no event back: the only observable result is the process
+/// being gone.
+pub fn quit(app: &AppHandle) {
+    app.exit(0);
+}

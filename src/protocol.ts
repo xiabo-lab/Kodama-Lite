@@ -48,7 +48,11 @@ export type Command =
   /** How much audio is on disk, and where. */
   | { type: "cache:stats" }
   /** Delete every cached audio file. */
-  | { type: "cache:clear" };
+  | { type: "cache:clear" }
+  /** Close the app. The Pi boots straight into this window full-screen
+   *  with no desktop chrome around it, so Settings' Quit row is the only
+   *  way out that isn't an SSH session. */
+  | { type: "app:quit" };
 
 // ── Events: data plane → view plane ───────────────────────────────────
 

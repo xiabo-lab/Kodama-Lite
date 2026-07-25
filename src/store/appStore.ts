@@ -44,6 +44,13 @@ function saveSidebarCollapsed(collapsed: boolean): void {
 
 export interface AppState {
   online: boolean;
+  /** Whether a reachability probe has actually answered yet. `online`
+   *  starts optimistically `true` so a cold boot doesn't flash an offline
+   *  banner before the first probe returns — which means `online === true`
+   *  on its own can't distinguish "the internet answered" from "nobody has
+   *  asked yet". Anything that must wait for a *confirmed* connection
+   *  (resume-on-startup) checks this too. */
+  netChecked: boolean;
   /** Sidebar rail state: `true` renders the icon-only rail. Toggled by the
    *  title bar's panel button. */
   sidebarCollapsed: boolean;
@@ -65,6 +72,7 @@ export interface AppState {
 
 export const useAppStore = create<AppState>((set, get) => ({
   online: true,
+  netChecked: false,
   history: [{ kind: "home" }],
   index: 0,
   route: { kind: "home" },
@@ -113,7 +121,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   applyEvents: (events) => {
     for (const e of events) {
       if (e.type === "net:status") {
-        set({ online: e.online });
+        set({ online: e.online, netChecked: true });
       }
     }
   },

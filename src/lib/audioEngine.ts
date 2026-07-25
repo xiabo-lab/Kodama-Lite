@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { dispatch } from "@/bus/bus";
+import { useAppStore } from "@/store/appStore";
 import { useLyricsStore } from "@/store/lyricsStore";
 import { useRadioStore } from "@/store/radioStore";
 import { usePlaybackStore } from "@/store/playbackStore";
@@ -32,23 +33,39 @@ export function useAudioEngine(): void {
   // the track therefore starts from its beginning rather than where it
   // was interrupted — which is the behaviour the setting promises.
   //
-  // Gated on the yt-dlp binary being ready rather than firing at mount:
-  // on a very first launch the managed binary is still downloading, and
-  // a resolve issued before then fails and leaves the bar in an error
-  // state the user never asked for. The ref makes it strictly one-shot,
-  // so toggling the setting later never retriggers it.
+  // Two gates, not a mount-time fire, and both are about the same thing:
+  // a resolve issued too early fails and leaves the bar showing an error
+  // the user never asked for, on a screen they may not even be looking at.
+  //
+  //   yt-dlp ready — on a very first launch the managed binary is still
+  //     downloading, so there is nothing to resolve with yet.
+  //   a *confirmed* connection — `online` starts optimistically `true`
+  //     before any probe has run, so `netChecked` is what distinguishes
+  //     "the internet answered" from "nobody has asked yet". In the car
+  //     this is the normal case: the Pi powers on with the ignition and
+  //     wins the race against the phone's hotspot every time. `App`
+  //     re-probes while offline, so this effect simply re-runs and fires
+  //     on the transition — the music starts when the network arrives,
+  //     with no play button involved.
+  //
+  // The ref makes it strictly one-shot: only the first launch auto-plays,
+  // and a connection that drops and returns mid-session doesn't restart
+  // whatever the user had deliberately paused.
   const ytdlpPhase = usePlaybackStore((s) => s.ytdlpPhase);
+  const online = useAppStore((s) => s.online);
+  const netChecked = useAppStore((s) => s.netChecked);
   const didResumeRef = useRef(false);
   useEffect(() => {
     if (didResumeRef.current) return;
     if (ytdlpPhase !== "ready") return;
+    if (!netChecked || !online) return;
     didResumeRef.current = true;
     if (!useSettingsStore.getState().resumeOnStartup) return;
     const s = usePlaybackStore.getState();
     if (s.index < 0 || s.index >= s.queue.length) return;
     if (s.playing) return;
     s.resume();
-  }, [ytdlpPhase]);
+  }, [ytdlpPhase, online, netChecked]);
 
   // ── OS media controls (MPRIS → Bluetooth AVRCP → the car) ───────────
   //
