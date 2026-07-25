@@ -22,7 +22,7 @@ export function VerticalTabs<T extends string>({
   onSelect: (id: T) => void;
 }) {
   return (
-    <nav className="sticky top-0 flex w-44 shrink-0 flex-col gap-1 self-start">
+    <nav className="sticky top-0 flex w-52 shrink-0 flex-col gap-1 self-start">
       {tabs.map((t) => (
         <button
           key={t.id}

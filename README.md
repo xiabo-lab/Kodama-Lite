@@ -8,16 +8,23 @@ at a locked 60 FPS even when the network is slow, unstable, or gone.
 
 See **[DESIGN.md](./DESIGN.md)** for the full architecture proposal.
 
-![Home, on the Pi's 1920x440 panel](./docs/screenshot-home.jpg)
+![Home, on the Pi's 1920x440 panel](./docs/screenshot-home.png)
 
-*Home. The sidebar collapses to an icon rail; the player bar spreads its controls
-across the full width so each is a finger target.*
+*Home, captured from the device. Page headings are gone and the cards are sized so a
+whole row of artwork clears the fold — on a 238px content area that's the difference
+between seeing a row and seeing the top third of one. The player bar gives the track a
+quarter of its width and spreads the controls across the rest.*
 
-![The full-screen karaoke stage](./docs/screenshot-karaoke.jpg)
+![The Library, sub-nav down the left](./docs/screenshot-library.png)
 
-*The karaoke stage (`L`, or the expand button). Three big lines, scroll-synced to the
-track, with a ±3s offset in Settings to compensate for Bluetooth latency to the car
-speakers.*
+*Library. Sub-navigation runs down the left rather than across the top: there are 1712
+spare horizontal pixels and almost no vertical ones. Explore works the same way.*
+
+![The full-screen karaoke stage](./docs/screenshot-karaoke.png)
+
+*The karaoke stage (`L`, or the expand button). Three big lines, scroll-synced, with a
+±3s offset in Settings for Bluetooth latency to the car speakers. Lyrics come from
+seven providers searched in tiers — usually one request, not seven.*
 
 ## Install on a Raspberry Pi
 
