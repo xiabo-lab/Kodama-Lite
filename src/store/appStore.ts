@@ -19,8 +19,34 @@ export type Route =
 
 const MAX_HISTORY = 50;
 
+const SIDEBAR_STORAGE_KEY = "kl:sidebar-collapsed";
+
+/** The collapsed/expanded rail is a deliberate, sticky user choice (on a
+ *  440px-tall bar panel the extra 144px of width matters), so it outlives
+ *  a reload. Same tiny localStorage pattern the InnerTube visitor token
+ *  uses — a private-mode throw just degrades to the default. */
+function loadSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveSidebarCollapsed(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(SIDEBAR_STORAGE_KEY, collapsed ? "1" : "0");
+  } catch {
+    /* private mode etc — the in-memory value still applies this session */
+  }
+}
+
 export interface AppState {
   online: boolean;
+  /** Sidebar rail state: `true` renders the icon-only rail. Toggled by the
+   *  title bar's panel button. */
+  sidebarCollapsed: boolean;
+  toggleSidebar: () => void;
   /** In-memory back/forward stack — `history[index]` is the current
    *  route. No History API integration (no URLs to bookmark on a Pi
    *  kiosk); this is enough for the TopBar's back/forward buttons and
@@ -41,6 +67,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   history: [{ kind: "home" }],
   index: 0,
   route: { kind: "home" },
+  sidebarCollapsed: loadSidebarCollapsed(),
+
+  toggleSidebar: () =>
+    set((s) => {
+      const sidebarCollapsed = !s.sidebarCollapsed;
+      saveSidebarCollapsed(sidebarCollapsed);
+      return { sidebarCollapsed };
+    }),
 
   navigate: (route) =>
     set((s) => {

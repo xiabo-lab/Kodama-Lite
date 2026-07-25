@@ -28,5 +28,8 @@ pub async fn handle_command(app: AppHandle, command: Command) {
         Command::ConnectivityCheck => subsystems::connectivity::check(&app),
         Command::StreamResolve { video_id } => subsystems::playback::resolve(&app, video_id),
         Command::StreamPrefetch { video_id } => subsystems::playback::prefetch(&app, video_id),
+        Command::AuthCheck => subsystems::auth::check(&app),
+        Command::AuthSignIn => subsystems::auth::sign_in(&app),
+        Command::AuthSignOut => subsystems::auth::sign_out(&app),
     }
 }

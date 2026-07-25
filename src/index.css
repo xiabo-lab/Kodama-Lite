@@ -89,28 +89,40 @@
     margin: 0;
   }
 
-  .shelf-scroll,
-  .app-scroll {
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
-  }
+  /* 40px, not the usual 8 — this is a finger target on the Pi's touch
+     panel, not a mouse target.
+
+     NOTE the deliberate absence of `scrollbar-width` AND `scrollbar-color`
+     here. Specifying *either* standard property opts the element into
+     standard scrollbar styling, which makes the engine discard every
+     ::-webkit-scrollbar rule below — the width silently reverts to the
+     platform default. Measured: with `scrollbar-color` still set, this
+     column reported a 15px scrollbar despite the 40px rule. The colours
+     therefore live on the -webkit- pseudo-elements only. */
   .shelf-scroll::-webkit-scrollbar,
   .app-scroll::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 40px;
+    height: 40px;
   }
   .shelf-scroll::-webkit-scrollbar-track,
   .app-scroll::-webkit-scrollbar-track {
     background: transparent;
   }
+  /* The thumb spans the full 40px so all of it is draggable, but paints
+     only the middle 20px: a 40px-wide solid bar reads as a UI panel rather
+     than a scrollbar. `background-clip: padding-box` is what keeps the
+     transparent border grabbable instead of merely invisible. */
   .shelf-scroll::-webkit-scrollbar-thumb,
   .app-scroll::-webkit-scrollbar-thumb {
     background: var(--border);
+    background-clip: padding-box;
+    border: 10px solid transparent;
     border-radius: 9999px;
   }
   .shelf-scroll::-webkit-scrollbar-thumb:hover,
   .app-scroll::-webkit-scrollbar-thumb:hover {
     background: var(--muted-foreground);
+    background-clip: padding-box;
   }
 }
 

@@ -9,6 +9,8 @@ import {
   ShuffleIcon,
   SkipBackIcon,
   SkipForwardIcon,
+  Volume2Icon,
+  VolumeXIcon,
   XIcon,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -17,15 +19,21 @@ import { useLyricsStore } from "@/store/lyricsStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
 import { useLikedSongsStore } from "@/store/likedSongsStore";
 import { LyricsBody, STAGE_LEADING } from "@/components/layout/lyrics-view";
+import { LyricsSourceButton } from "@/components/layout/lyrics-source-picker";
+import { QueueButton, QueuePanel } from "@/components/layout/queue-panel";
 import { cn } from "@/lib/utils";
 
 // Plain `vite dev` in a browser has no Tauri backend; `getCurrentWindow()`
 // throws there. Same guard the title bar uses.
 const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+// `shrink-0` on both button styles is load-bearing, not cosmetic: these are
+// flex children, so without it a row that runs out of width squeezes the
+// boxes narrower than the icons they contain — and the visible glyph stops
+// marking where the hit target actually is.
 const SECONDARY_BTN =
-  "flex size-[clamp(3.5rem,15vh,4rem)] items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-[clamp(1.75rem,7vh,2rem)]";
-const PLAY_BTN = "size-[clamp(4.5rem,21vh,5.5rem)]";
+  "flex size-[clamp(3.5rem,15vh,4rem)] shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-[clamp(1.75rem,7vh,2rem)] [&_svg]:shrink-0";
+const PLAY_BTN = "size-[clamp(4.5rem,21vh,5.5rem)] shrink-0";
 const PLAY_GLYPH = "size-[clamp(2.25rem,9vh,2.75rem)]";
 const BTN_GAP = "gap-[clamp(0.75rem,2.5vw,2rem)]";
 
@@ -41,18 +49,55 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+/**
+ * Mute toggle + slider. Its own component so the ~60Hz-adjacent volume
+ * subscription re-renders this pair rather than the whole stage (the same
+ * reason `AudioEngine` is split out of `AppShell`).
+ *
+ * The track is deliberately taller than the player bar's 6px one — this is
+ * the version you drag with a fingertip while driving.
+ */
+function KaraokeVolume() {
+  const volume = usePlaybackStore((s) => s.volume);
+  const muted = usePlaybackStore((s) => s.muted);
+  const setVolume = usePlaybackStore((s) => s.setVolume);
+  const toggleMute = usePlaybackStore((s) => s.toggleMute);
+  const Icon = muted || volume === 0 ? VolumeXIcon : Volume2Icon;
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        aria-label={muted ? "Unmute" : "Mute"}
+        aria-pressed={muted}
+        onClick={toggleMute}
+        className={SECONDARY_BTN}
+      >
+        <Icon />
+      </button>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={muted ? 0 : Math.round(volume * 100)}
+        onChange={(e) => setVolume(Number(e.target.value) / 100)}
+        aria-label="Volume"
+        className="h-3 w-[clamp(5rem,9vw,9rem)] accent-brand"
+      />
+    </div>
+  );
+}
+
 function repeatLabel(repeat: "off" | "all" | "one"): string {
   return repeat === "one" ? "Repeat one" : repeat === "all" ? "Repeat all" : "Repeat off";
 }
 
 /**
- * Full-screen "karaoke" lyrics overlay. Simplified from YTMLite's version:
- * no lyrics-source picker (see lyrics-view.tsx) and no queue popover button
- * (see queue-panel.tsx for the standalone queue panel instead). The stage
- * layout itself — three big lyric lines, one row of finger-sized transport
- * controls, tap-to-reveal chrome — is kept faithfully; it's built for the
- * Pi's 1920x440 touch panel and is the part that actually defines the
- * feature.
+ * Full-screen "karaoke" lyrics overlay: three big lyric lines, a centered
+ * row of finger-sized transport controls, a right-hand cluster (lyrics
+ * source, queue, volume) and tap-to-reveal chrome. Built for the Pi's
+ * 1920x440 touch panel, which is why every hit target here is sized in
+ * `vh` rather than pixels.
  */
 export function KaraokeView() {
   const open = useKaraokeStore((s) => s.open);
@@ -157,9 +202,16 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
     >
       <div
         aria-hidden={!chrome}
+        // Permanently `pointer-events-none` on the container: it's a
+        // full-width band whose height comes from its content, and nothing
+        // in it except the seek slider is interactive. Letting the band
+        // itself swallow taps meant its exact laid-out height decided
+        // whether controls below it were reachable — a hit target that
+        // depends on how tall a title happened to render is a bug waiting
+        // to happen. The slider opts back in below.
         className={cn(
-          "absolute inset-x-0 top-0 z-10 flex items-center gap-[clamp(0.75rem,2vw,2rem)] bg-gradient-to-b from-black via-black/85 to-transparent pb-6 pl-[clamp(1rem,3vw,3rem)] pr-[clamp(4.5rem,7vw,7rem)] pt-[clamp(0.5rem,2.5vh,1rem)] transition-opacity duration-300",
-          chrome ? "opacity-100" : "pointer-events-none opacity-0",
+          "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center gap-[clamp(0.75rem,2vw,2rem)] bg-gradient-to-b from-black via-black/85 to-transparent pb-6 pl-[clamp(1rem,3vw,3rem)] pr-[clamp(4.5rem,7vw,7rem)] pt-[clamp(0.5rem,2.5vh,1rem)] transition-opacity duration-300",
+          chrome ? "opacity-100" : "opacity-0",
         )}
       >
         <div className="flex min-w-0 max-w-[38%] shrink items-baseline gap-2">
@@ -181,7 +233,12 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
               if (scrub !== null) seek(scrub);
               setScrub(null);
             }}
-            className="h-2 min-w-0 flex-1 accent-brand"
+            // The one interactive thing in the chrome band — and only while
+            // the band is actually revealed.
+            className={cn(
+              "h-3 min-w-0 flex-1 accent-brand",
+              chrome ? "pointer-events-auto" : "pointer-events-none",
+            )}
           />
           <span className="w-12 shrink-0 text-sm tabular-nums text-muted-foreground">{formatTime(duration)}</span>
         </div>
@@ -208,7 +265,10 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      <div className="shrink-0 px-6 pb-[clamp(0.5rem,2.5vh,1.25rem)]">
+      {/* `relative` + an absolutely-positioned right cluster, so the
+          transport row stays optically centered on the 1920px panel no
+          matter how many utility controls sit beside it. */}
+      <div className="relative shrink-0 px-6 pb-[clamp(0.5rem,2.5vh,1.25rem)]">
         <div className={cn("flex items-center justify-center", BTN_GAP)}>
           <button
             type="button"
@@ -229,6 +289,7 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
           >
             <ShuffleIcon />
           </button>
+
           <button type="button" aria-label="Previous" onClick={prev} disabled={!hasTrack} className={SECONDARY_BTN}>
             <SkipBackIcon className="fill-current" />
           </button>
@@ -259,6 +320,15 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
           >
             {repeat === "one" ? <Repeat1Icon /> : <RepeatIcon />}
           </button>
+        </div>
+
+        <div className="absolute inset-y-0 right-6 flex items-center gap-[clamp(0.25rem,1vw,0.75rem)]">
+          <LyricsSourceButton className={SECONDARY_BTN} disabled={!hasTrack} />
+          <div className="relative">
+            <QueuePanel />
+            <QueueButton className={SECONDARY_BTN} />
+          </div>
+          <KaraokeVolume />
         </div>
       </div>
 

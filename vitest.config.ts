@@ -11,6 +11,12 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  // Mirrors vite.config.ts's define so anything a test transitively imports
+  // doesn't blow up on an undeclared global. Not read from package.json
+  // here — no test asserts on the value, only on it existing.
+  define: {
+    __APP_VERSION__: JSON.stringify("test"),
+  },
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],

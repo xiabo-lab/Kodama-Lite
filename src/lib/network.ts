@@ -14,7 +14,7 @@ import { fetchSearch } from "@/lib/innertube/search";
 import { fetchPlaylistFirstPage, fetchPlaylistContinuation } from "@/lib/innertube/playlist";
 import { fetchAlbum } from "@/lib/innertube/album";
 import { fetchArtist } from "@/lib/innertube/artist";
-import { fetchBestLyrics } from "@/lib/lyrics/sources";
+import { fetchAllLyrics, type LyricsSource } from "@/lib/lyrics/sources";
 
 /**
  * The "network subsystem" — everything that talks to YouTube Music
@@ -85,7 +85,14 @@ export type ContentEvent =
   | { type: "artist:loaded"; id: string; page: ArtistPage }
   | { type: "artist:error"; id: string; message: string }
   | { type: "lyrics:loading"; videoId: string }
-  | { type: "lyrics:loaded"; videoId: string; lyrics: Lyrics | null }
+  /** Every source's result, not just the winner. All seven fetches run in
+   *  parallel regardless, so shipping the whole map is free and is what
+   *  lets the source picker switch sources without a refetch. */
+  | {
+      type: "lyrics:loaded";
+      videoId: string;
+      sources: Record<LyricsSource, Lyrics | null>;
+    }
   | { type: "lyrics:error"; videoId: string; message: string };
 
 // ── Pump: identical batching contract to the Rust-routed bus ──────────
@@ -232,8 +239,8 @@ async function handle(command: ContentCommand): Promise<void> {
     case "lyrics:load": {
       publish({ type: "lyrics:loading", videoId: command.videoId });
       try {
-        const lyrics = await fetchBestLyrics(command);
-        publish({ type: "lyrics:loaded", videoId: command.videoId, lyrics });
+        const sources = await fetchAllLyrics(command);
+        publish({ type: "lyrics:loaded", videoId: command.videoId, sources });
       } catch (e) {
         publish({ type: "lyrics:error", videoId: command.videoId, message: errMessage(e) });
       }

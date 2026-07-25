@@ -90,20 +90,29 @@ function fetchFor(source: LyricsSource, p: LyricsQueryParams): Promise<Lyrics | 
  * source with *plain* lyrics win. A source that errors or has nothing
  * simply falls through — never blocks or fails the others.
  *
- * Kodama-Lite doesn't have YTMLite's per-source picker UI (a Phase 3
- * cut — see README), so only the winning result is kept; every other
- * source's fetch still ran, just discarded. `fetchAllLyrics` below
- * exposes the per-source map for callers that do want it (e.g. a future
- * source-picker).
+ * All seven fetches run either way, so the network subsystem hands the
+ * whole map to the view plane (`lyrics:loaded`) and lets the source picker
+ * override the auto-pick locally, with no refetch. `pickBest` below is that
+ * rule on its own, so the picker's "Auto" entry resolves through exactly
+ * the same code path this does.
  */
 export async function fetchBestLyrics(params: LyricsQueryParams): Promise<Lyrics | null> {
-  const results = await fetchAllLyrics(params);
+  return pickBest(await fetchAllLyrics(params));
+}
 
+/**
+ * The auto-pick rule over an already-fetched per-source map: the first
+ * source (in `SOURCE_ORDER`) with *timed* lyrics wins; only if none have
+ * timed lyrics does the first with *plain* lyrics win.
+ */
+export function pickBest(
+  results: Partial<Record<LyricsSource, Lyrics | null>>,
+): Lyrics | null {
   for (const s of SOURCE_ORDER) {
-    if (results[s]?.kind === "timed") return results[s];
+    if (results[s]?.kind === "timed") return results[s] ?? null;
   }
   for (const s of SOURCE_ORDER) {
-    if (results[s]?.kind === "plain") return results[s];
+    if (results[s]?.kind === "plain") return results[s] ?? null;
   }
   return null;
 }

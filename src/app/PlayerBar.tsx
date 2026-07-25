@@ -2,7 +2,6 @@ import { useRef } from "react";
 import {
   Loader2Icon,
   Maximize2Icon,
-  MicVocalIcon,
   PauseIcon,
   PlayIcon,
   Repeat1Icon,
@@ -16,6 +15,7 @@ import {
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
 import { QueueButton, QueuePanel } from "@/components/layout/queue-panel";
+import { LyricsSourceButton } from "@/components/layout/lyrics-source-picker";
 import { cn } from "@/lib/utils";
 
 /**
@@ -51,6 +51,7 @@ export function PlayerBar() {
   const setShuffle = usePlaybackStore((s) => s.setShuffle);
   const cycleRepeat = usePlaybackStore((s) => s.cycleRepeat);
   const setKaraokeOpen = useKaraokeStore((s) => s.setOpen);
+  const karaokeOpen = useKaraokeStore((s) => s.open);
 
   const track = index >= 0 ? queue[index] : undefined;
   const hasTrack = !!track;
@@ -69,9 +70,17 @@ export function PlayerBar() {
 
   return (
     <aside className="relative z-10 mx-2 mb-2 flex shrink-0 flex-col gap-2 rounded-[10px] border border-sidebar-border bg-surface px-4 py-2.5 shadow-sm">
-      <QueuePanel />
+      {/* Only one QueuePanel may be mounted at a time: they share a store,
+          so a second (invisible, behind the karaoke overlay) instance would
+          see every click as an outside-click and slam the visible one shut.
+          The karaoke stage renders its own. */}
+      {!karaokeOpen && <QueuePanel />}
       <div className="flex items-center gap-4">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
+        {/* Fixed-width meta block rather than `flex-1`. On the Pi's
+            1920px-wide panel a flexible one claimed half the bar for a
+            two-line label, leaving the controls bunched into the right
+            half; pinning it hands every spare pixel to the row below. */}
+        <div className="flex w-64 shrink-0 items-center gap-3">
           <div className="size-11 shrink-0 rounded-md border border-hairline bg-muted" />
           <div className="flex min-w-0 flex-col">
             <span className="truncate text-base font-semibold leading-tight">
@@ -83,12 +92,13 @@ export function PlayerBar() {
           </div>
         </div>
 
-        {/* One flex group, one gap, for every button from Shuffle through
-            the volume slider — previously this was two separate flex-1
-            groups (transport centered, utility right-justified), which
-            left a much wider gap between Repeat and the fullscreen-lyrics
-            button than between any other pair. */}
-        <div className="flex flex-1 items-center justify-end gap-6">
+        {/* One flex group for every control from Shuffle through the volume
+            slider, spread edge to edge across whatever width is left
+            (`justify-between`) instead of packed against the right margin.
+            `gap-4` is the floor, not the spacing: it only takes effect once
+            the window is narrow enough that there's no slack left to
+            distribute. */}
+        <div className="flex flex-1 items-center justify-between gap-4">
           <button
             className={cn(ICON_BTN, shuffle && "text-brand")}
             aria-label="Shuffle"
@@ -147,14 +157,14 @@ export function PlayerBar() {
           >
             <Maximize2Icon className="size-5" />
           </button>
-          <button
-            className={ICON_BTN}
-            aria-label="Lyrics"
+          {/* The mic is the lyrics-*source* picker, not a second way into
+              the karaoke stage — the expand icon to its left is that, and
+              having both open the same overlay made one of them dead
+              weight. */}
+          <LyricsSourceButton
+            className={cn(ICON_BTN, "[&_svg]:size-5")}
             disabled={!hasTrack}
-            onClick={() => setKaraokeOpen(true)}
-          >
-            <MicVocalIcon className="size-5" />
-          </button>
+          />
           <QueueButton className={cn(ICON_BTN, "flex items-center justify-center")} />
           <button className={ICON_BTN} aria-label={muted ? "Unmute" : "Mute"} onClick={toggleMute}>
             <VolumeIcon className="size-5" />

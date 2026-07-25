@@ -33,6 +33,15 @@ pub enum Command {
         #[serde(rename = "videoId")]
         video_id: String,
     },
+    /// Re-read the webview's cookie jar and report the current session.
+    #[serde(rename = "auth:check")]
+    AuthCheck,
+    /// Open the Google sign-in webview and watch for the session cookies.
+    #[serde(rename = "auth:signIn")]
+    AuthSignIn,
+    /// Drop every Google/YouTube cookie from the jar.
+    #[serde(rename = "auth:signOut")]
+    AuthSignOut,
 }
 
 // ── Events: data plane → view plane ───────────────────────────────────
@@ -64,4 +73,17 @@ pub enum AppEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
+    /// The current account session — see the TS mirror for what `cookie`
+    /// and `sapisid` are and why neither side persists them.
+    #[serde(rename = "auth:state")]
+    AuthState {
+        #[serde(rename = "signedIn")]
+        signed_in: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cookie: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sapisid: Option<String>,
+    },
+    #[serde(rename = "auth:error")]
+    AuthError { message: String },
 }

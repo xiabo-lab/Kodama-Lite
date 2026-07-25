@@ -12,6 +12,7 @@ import { Playlist } from "@/screens/Playlist";
 import { Album } from "@/screens/Album";
 import { Artist } from "@/screens/Artist";
 import { useAppStore, type Route } from "@/store/appStore";
+import { cn } from "@/lib/utils";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
 
@@ -34,6 +35,7 @@ function isTypingTarget(el: EventTarget | null): boolean {
  */
 export function AppShell() {
   const route = useAppStore((s) => s.route);
+  const karaokeOpen = useKaraokeStore((s) => s.open);
 
   // `L` opens the full-screen karaoke lyrics view — same shortcut as
   // YTMLite. Ignored while typing (e.g. the Search box) so the letter
@@ -53,14 +55,28 @@ export function AppShell() {
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
       <AudioEngine />
-      <TopBar />
-      <div className="flex min-h-0 flex-1">
-        <Sidebar />
-        <main className="app-scroll min-h-0 min-w-0 flex-1 overflow-y-auto">
-          <Screen route={route} />
-        </main>
+      {/* The karaoke stage is an overlay, not a route — the whole shell
+          stays mounted behind it. `z-50` keeps it on top visually, but the
+          shell underneath was still hit-testable and still in the tab
+          order: 17 controls, including a full second set of transport
+          buttons in the same horizontal band as the stage's own, sitting
+          invisibly under the user's finger. `inert` takes the subtree out
+          of hit-testing, focus and the a11y tree in one go;
+          `pointer-events-none` is the belt-and-braces half for engines
+          where `inert` isn't implemented (older WebKitGTK).
+
+          `display: contents` so this wrapper adds no box of its own and the
+          three children keep participating in the parent's flex column. */}
+      <div className={cn("contents", karaokeOpen && "pointer-events-none")} inert={karaokeOpen}>
+        <TopBar />
+        <div className="flex min-h-0 flex-1">
+          <Sidebar />
+          <main className="app-scroll min-h-0 min-w-0 flex-1 overflow-y-auto">
+            <Screen route={route} />
+          </main>
+        </div>
+        <PlayerBar />
       </div>
-      <PlayerBar />
       <KaraokeView />
     </div>
   );

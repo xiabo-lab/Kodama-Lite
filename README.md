@@ -93,21 +93,35 @@ What's real:
   failure (an error card + Retry, never a frozen spinner or a blank screen).
 - Lyrics: all 7 of YTMLite's sources (YouTube Music, LRCLIB, Kugou, NetEase,
   Musixmatch, QQ Music, Genius — `src/lib/lyrics/`), same auto-pick preference order
-  and "timed beats plain" rule as YTMLite. No manual source-picker dropdown yet
-  (`fetchAllLyrics` exposes the per-source map for one, ready to build); the karaoke
-  stage scrolls and highlights the active line with the same easing/timing engine as
-  YTMLite, opened via the player bar's lyrics/full-screen buttons or the `L` shortcut.
-- A queue panel (now playing / up next, jump-to, remove) anchored to the player bar.
+  and "timed beats plain" rule as YTMLite, plus a manual source picker (the mic
+  button in both bars). All 7 are fetched in parallel for every track anyway, so
+  `lyrics:loaded` ships the whole per-source map and switching is a local `set()`
+  with no refetch; each row shows whether that provider has synced, plain or no
+  lyrics for this track, and the choice persists across tracks and restarts, falling
+  back to auto whenever the pinned source has nothing. The karaoke stage scrolls and
+  highlights the active line with the same easing/timing engine as YTMLite, opened
+  via the player bar's full-screen button or the `L` shortcut.
+- A queue panel (now playing / up next, jump-to, remove), anchored to the player bar
+  and to the karaoke stage's own right-hand cluster (lyrics source / queue / volume).
+- **Accounts/sign-in.** `subsystems/auth.rs` opens a Google login webview and reads
+  the resulting session out of the runtime cookie jar — the HttpOnly `SID`/`HSID`/
+  `SSID` cookies `document.cookie` can't see, which is the whole reason that half
+  lives in Rust. `authHeaders()` turns it into the `Cookie` + `Authorization:
+  SAPISIDHASH` pair InnerTube wants (SHA-1 in `lib/innertube/sha1.ts`, tested against
+  the RFC 3174 vectors, rather than `crypto.subtle` — WebCrypto needs a secure
+  context and Tauri's custom protocol isn't reliably one). Nothing is persisted by
+  the app: the webview's own cookie jar is the source of truth and `auth:check`
+  re-reads it on boot, so a live Google session never lands in localStorage.
+  Signed-out remains a fully-supported mode.
 - A "like" heart on the karaoke stage — local-only (`likedSongsStore`, persisted to
-  localStorage), not synced to a real YouTube Music account: liking a track for real
-  needs the same signed-in cookie session accounts/sign-in is waiting on. Disclosed in
-  the button's own doc comment rather than silently faking a synced like.
+  localStorage), not synced to a real YouTube Music account. The session now exists
+  to do it for real; the *write* endpoint (`like/like`) hasn't been ported. Disclosed
+  in the button's own doc comment rather than silently faking a synced like.
 
-What's deliberately cut for tonight's deadline (all disclosed in-line where they'd
-otherwise be expected):
-- **Accounts/sign-in.** Every request goes out anonymous — `authHeaders()` in
-  `src/lib/innertube/shared.ts` is stubbed to `{}` and is the one seam a real cookie
-  jar will plug into later. `Library` is an honest stub screen, not a dead link.
+What's deliberately cut (all disclosed in-line where they'd otherwise be expected):
+- **The library's own fetchers.** Sign-in works, but the parsers for
+  `FEmusic_liked_playlists` / `FEmusic_liked_videos` aren't ported, so `Library` is
+  still a stub screen — now one that says which of the two reasons applies.
 - **Playlist/album/artist headers** render as a plain inline block instead of
   YTMLite's title-bar-integrated hero header — same data, simpler placement (see
   `components/shared/entity-header.tsx`).
@@ -115,7 +129,7 @@ otherwise be expected):
   no drag-to-reorder queue, no Autoplay/radio continuation, no moods/genre tile
   drill-down, no virtualized track lists (fine at the list lengths a Pi 5 sees).
 
-Verified from this environment: `tsc --noEmit`, `vite build`, and `vitest run` (12
+Verified from this environment: `tsc --noEmit`, `vite build`, and `vitest run` (18
 tests) all pass. Exercised live via `claude-in-chrome` browser automation against the
 mock Rust bus (there's no Rust toolchain in this environment, so the real Tauri HTTP
 plugin can't be invoked here) — this **is** how a real bug got caught and fixed:
@@ -131,6 +145,20 @@ successfully round-tripping end to end (needs the actual Tauri HTTP plugin + a r
 network, i.e. the Pi or a real `cargo tauri dev`) and everything Phase 2's own
 "not confirmed" note already covers (`<audio>.play()` under a real tap).
 
+**The accounts subsystem is the largest unverified surface in the repo.** There is
+still no Rust toolchain here, so `subsystems/auth.rs` has never been compiled, and
+its central call — `Webview::cookies_for_url`, which is what makes the whole design
+work — has never been run. It is written against the documented Tauri 2 API and its
+documented semantics (a runtime-wide cookie store, so the main window can read what
+the login window set; HttpOnly cookies included). Everything on the TypeScript side
+of that seam *is* verified: the SHA-1 against the published vectors, the store
+transitions, the picker, and the whole UI at a real 1920x440 viewport. Two things to
+check first on the device: that the cookie read returns the session at all, and
+whether WebKitGTK persists that jar across restarts — if it doesn't, `auth:check`
+will report signed-out on every boot and sign-in becomes a per-launch step rather
+than a one-off. Storing the cookies ourselves would fix that, and was deliberately
+not done: it means writing a live Google master session to disk in plaintext.
+
 ```bash
 npm install
 npm run dev          # or: npm run build && npm run preview
@@ -141,8 +169,8 @@ npm run dev          # or: npm run build && npm run preview
 npm test             # store-logic unit tests
 ```
 
-Next: accounts/sign-in → Pi integration (streaming, Bluetooth/MPRIS, updater) → 60 FPS
-polish on the device.
+Next: confirm the accounts subsystem on real hardware → the library's own fetchers →
+Pi integration (streaming, Bluetooth/MPRIS, updater) → 60 FPS polish on the device.
 
 ## Layout
 
@@ -155,9 +183,9 @@ src/                    view plane
   lib/lyrics/           LRC parsing + 7 sources (YTM/LRCLIB/Kugou/NetEase/
                          Musixmatch/QQ/Genius) + best-source aggregator
   bus/                  transport (tauri | mock) + rAF-batched event pump (both buses)
-  store/                one store per domain: app (route/online), playback, home,
-                         explore, search, playlist, album, artist, lyrics, karaoke,
-                         queuePanel
+  store/                one store per domain: app (route/online/sidebar), auth,
+                         playback, home, explore, search, playlist, album, artist,
+                         lyrics, karaoke, queuePanel
   lib/audioEngine.ts    owns the <audio> element, wires it to playbackStore
   components/shared/    shelf card/carousel/grid/section, track list, entity header,
                          thumbnail — shared across every content screen
@@ -169,7 +197,8 @@ src-tauri/src/          data plane (connectivity + local audio-streaming server 
   protocol.rs           Rust mirror of the Rust-routed half of the contract
   bus.rs                command router + event emitter
   ytdlp.rs              managed yt-dlp binary lifecycle (ported from YTMLite)
-  subsystems/           connectivity, playback (+ its local stream server)
+  subsystems/           auth (login webview + cookie-jar read), connectivity,
+                         playback (+ its local stream server)
 Reference Project/      Kodama (read-only architecture reference)
 DESIGN.md               architecture proposal
 ```

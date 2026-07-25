@@ -7,6 +7,7 @@
 //! `src/lib/contentBus.ts`) — there is no `library`/`search`/etc. subsystem
 //! here to mirror it.
 
+pub mod auth;
 pub mod connectivity;
 pub mod playback;
 

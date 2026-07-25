@@ -76,6 +76,28 @@ export function createMockTransport(): Transport {
         case "stream:prefetch":
           // Silent, fire-and-forget — matches the real subsystem.
           break;
+        case "auth:check":
+        case "auth:signOut":
+          // No cookie jar to read in a plain browser tab.
+          setTimeout(() => emit({ type: "auth:state", signedIn: false }), 60);
+          break;
+        case "auth:signIn":
+          // Deliberately NOT faked. Signing in means reading HttpOnly
+          // cookies out of a real webview's cookie store (see
+          // `subsystems/auth.rs`); there is no way to do that from a
+          // browser tab, and a mock "signed in" with no credentials would
+          // make every authenticated InnerTube call fail confusingly
+          // later instead of here.
+          setTimeout(
+            () =>
+              emit({
+                type: "auth:error",
+                message:
+                  "Sign-in needs the desktop app — the mock data plane has no cookie jar.",
+              }),
+            120,
+          );
+          break;
       }
     },
     onEvent(handler) {

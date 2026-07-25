@@ -1,11 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core permissions: invoke app commands, listen to bus events, open external links, and the scoped outbound hosts the JS-side network/lyrics subsystem is allowed to reach.",
+  "description": "Core permissions: invoke app commands, listen to bus events, open external links, toggle full screen from the settings menu, and the scoped outbound hosts the JS-side network/lyrics subsystem is allowed to reach.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "opener:default",
+    "core:window:allow-is-fullscreen",
+    "core:window:allow-set-fullscreen",
     {
       "identifier": "http:default",
       "allow": [

@@ -1,4 +1,5 @@
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { sha1Hex } from "./sha1";
 import type { ShelfItem, Thumbnail } from "./types";
 
 /**
@@ -8,17 +9,15 @@ import type { ShelfItem, Thumbnail } from "./types";
  * they're pure functions over YouTube Music's JSON shapes and don't touch
  * accounts at all.
  *
- * What's DELIBERATELY DIFFERENT from YTMLite, both in `authHeaders()`:
- * Kodama-Lite has no accounts/sign-in yet (that's still ahead of this
- * phase) — every request goes out anonymous. YTMLite proved this is a
- * real, useful mode on its own: search, Explore/Charts/New releases, and
- * public playlists/albums/artists all work signed-out; only Liked Songs,
- * personal playlists and personalized Home recommendations need a cookie
- * jar. `authHeaders()` is the one seam sign-in will plug into later — it
- * already returns the exact shape (`Cookie` + `Authorization` +
- * `X-Goog-PageId`) `innertubePost` expects, so wiring in a real cookie
- * jar means changing this one function, not the ~20 call sites that use
- * it indirectly through `innertubePost`.
+ * `authHeaders()` is the accounts seam, and it is now wired: the auth
+ * subsystem (`src-tauri/src/subsystems/auth.rs`) reads the signed-in
+ * session out of the webview's cookie jar and pushes it here via
+ * `setSession()`. Signed-out is still a first-class mode, not a broken
+ * one — `authHeaders()` returns `{}` and search, Explore/Charts/New
+ * releases and public playlists/albums/artists all keep working; only
+ * Liked Songs, personal playlists and personalized Home recommendations
+ * need the cookie jar. Every one of the ~20 call sites goes through
+ * `innertubePost`, so signing in and out changes nothing but this file.
  *
  * This module runs in the view plane (this is a `src/lib`, not a data-plane
  * subsystem) using the Tauri HTTP plugin's `fetch` — see the network
@@ -109,22 +108,63 @@ const BASE_HEADERS: Record<string, string> = {
   "X-Goog-AuthUser": "0",
 };
 
-/**
- * Auth headers for authenticated InnerTube endpoints. Always anonymous for
- * now — see the module doc comment. Returning `{}` is a legitimate,
- * fully-supported mode: every fetcher in this module works signed-out.
- */
-export async function authHeaders(): Promise<Record<string, string>> {
-  return {};
+const YTM_ORIGIN = "https://music.youtube.com";
+
+export interface InnertubeSession {
+  /** The full `Cookie:` header value for music.youtube.com. */
+  cookie: string;
+  /** The SAPISID (or `__Secure-3PAPISID`) the digest is built from. */
+  sapisid: string;
 }
 
 /**
- * Drop any cached auth state. No-op today (there is none yet); kept so
- * callers written against the eventual accounts phase — "call this after
- * sign-in/out" — already exist and don't need to change later.
+ * The signed-in session, held in memory only — never localStorage, never a
+ * file this app writes. The webview's own cookie jar is the single source
+ * of truth; `auth:check` re-reads it on every boot and calls back in here.
+ * See `subsystems/auth.rs` for the other half.
+ */
+let session: InnertubeSession | null = null;
+
+/** Called by `authStore` when an `auth:state` event lands. */
+export function setSession(next: InnertubeSession | null): void {
+  session = next;
+}
+
+export function hasSession(): boolean {
+  return session !== null;
+}
+
+/**
+ * Auth headers for authenticated InnerTube endpoints. Returns `{}` when
+ * signed out — a legitimate, fully-supported mode: every fetcher in this
+ * module works anonymously.
+ *
+ * The `Authorization` value is Google's `SAPISIDHASH` scheme: a SHA-1 over
+ * `"<unix-seconds> <SAPISID> <origin>"`. It's recomputed per request rather
+ * than cached because the timestamp is part of the digest — YouTube rejects
+ * one that has drifted too far from its own clock.
+ *
+ * Kept `async` even though nothing awaits any more: every caller already
+ * awaits it, and the signature is the seam's contract.
+ */
+export async function authHeaders(): Promise<Record<string, string>> {
+  if (!session) return {};
+  const ts = Math.floor(Date.now() / 1000);
+  const digest = sha1Hex(`${ts} ${session.sapisid} ${YTM_ORIGIN}`);
+  return {
+    Cookie: session.cookie,
+    Authorization: `SAPISIDHASH ${ts}_${digest}`,
+  };
+}
+
+/**
+ * Drop the cached session. The cookie jar itself is cleared on the Rust
+ * side (`auth:signOut`); this is the view plane's half — call it whenever
+ * the session changes in either direction so a stale `Cookie` header can't
+ * outlive it.
  */
 export function resetAuthCache(): void {
-  /* nothing to reset yet — see authHeaders() */
+  session = null;
 }
 
 export async function innertubePost(

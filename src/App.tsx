@@ -3,6 +3,7 @@ import { dispatch, startBus } from "@/bus/bus";
 import type { AppEvent } from "@/protocol";
 import { startContentBus, dispatchContent, type ContentEvent } from "@/lib/network";
 import { useAppStore } from "@/store/appStore";
+import { useAuthStore } from "@/store/authStore";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useHomeStore } from "@/store/homeStore";
 import { useExploreStore } from "@/store/exploreStore";
@@ -29,6 +30,7 @@ import { AppShell } from "@/app/AppShell";
 export default function App() {
   const applyEvents = useCallback((events: AppEvent[]) => {
     useAppStore.getState().applyEvents(events);
+    useAuthStore.getState().applyEvents(events);
     usePlaybackStore.getState().applyEvents(events);
   }, []);
 
@@ -46,6 +48,13 @@ export default function App() {
     const stopBus = startBus(applyEvents);
     const stopContentBus = startContentBus(applyContentEvents);
     dispatch({ type: "connectivity:check" });
+    // Re-read the webview's cookie jar. A session that survived the last
+    // run makes this a silent, instant sign-in; otherwise it answers
+    // "signed out" and nothing changes. It's a local read, but still an
+    // event — so the `home:load` below genuinely does go out anonymous on
+    // a cold boot. `authStore` refetches Home when the answer comes back
+    // signed-in, which is what makes the feed personalized.
+    dispatch({ type: "auth:check" });
     dispatchContent({ type: "home:load" });
     return () => {
       stopBus();
