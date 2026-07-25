@@ -8,6 +8,80 @@ at a locked 60 FPS even when the network is slow, unstable, or gone.
 
 See **[DESIGN.md](./DESIGN.md)** for the full architecture proposal.
 
+![Home, on the Pi's 1920x440 panel](./docs/screenshot-home.jpg)
+
+*Home. The sidebar collapses to an icon rail; the player bar spreads its controls
+across the full width so each is a finger target.*
+
+![The full-screen karaoke stage](./docs/screenshot-karaoke.jpg)
+
+*The karaoke stage (`L`, or the expand button). Three big lines, scroll-synced to the
+track, with a ±3s offset in Settings to compensate for Bluetooth latency to the car
+speakers.*
+
+## Install on a Raspberry Pi
+
+For a Raspberry Pi 5 running Raspberry Pi OS (64-bit). You need the desktop
+session — not a bare SSH shell — because the media controls register on the
+session D-Bus.
+
+**1. Find the latest release.** Open
+[the releases page](https://github.com/xiabo-lab/Kodama-Lite/releases) and note the
+version number at the top (for example `v0.1.10`).
+
+**2. Download and install it.** In a terminal on the Pi, substituting that version:
+
+```bash
+VER=0.1.10
+curl -fL --progress-bar -o /tmp/kodama-lite.deb \
+  "https://github.com/xiabo-lab/Kodama-Lite/releases/download/v${VER}/Kodama-Lite_${VER}_arm64.deb"
+chmod 644 /tmp/kodama-lite.deb
+sudo apt-get install -y /tmp/kodama-lite.deb
+```
+
+The `chmod` is not superstition: `apt` drops to the `_apt` user to read the file and
+cannot traverse a restrictive home directory, which is also why the file is staged in
+`/tmp`.
+
+**3. Launch it** from the desktop menu (Sound & Video → Kodama-Lite), or run
+`kodama-lite` in a terminal. It opens full-screen. Press `F11`, or use the full-screen
+button in the title bar, to leave full screen.
+
+**4. Sign in** (optional). Settings → Account → Sign in opens a Google login window.
+Search, Explore and public playlists all work signed out; your library, liked songs
+and personalised recommendations need an account.
+
+**5. Pair Bluetooth audio** (optional). Pair the speaker or car stereo from the Pi's
+own Bluetooth settings first, then set it as the output device. Once the app is
+running, the car should show the track title and artist and its transport buttons
+should work — that comes from the MPRIS service the app publishes.
+
+### Updating
+
+Repeat step 2 with the newer version number; `apt` upgrades in place and keeps your
+settings, cache and session. If you have the repository cloned on the Pi, the same
+thing is scripted:
+
+```bash
+bash scripts/update-pi.sh          # check, then install if newer
+bash scripts/update-pi.sh --check  # report only, change nothing
+```
+
+### If something is wrong
+
+- **No sound over Bluetooth, or stuttering audio** —
+  `bash scripts/bt-audio-doctor.sh` checks the audio profile, codec, buffers, WiFi
+  band and CPU governor, and `--fix` applies the safe corrections. Note that
+  Bluetooth is 2.4GHz whatever band your WiFi uses, so nearby 2.4GHz transmitters
+  (including a wireless keyboard/mouse dongle plugged into the Pi itself) can be the
+  cause.
+- **The car shows no track info** — check the log for
+  `[media] no OS media controls`. That means no session D-Bus was available, which
+  happens when the app is launched over SSH rather than from the desktop.
+- **A track won't play** — the player bar says so rather than failing silently. The
+  first play of any track has to fetch it, so give it a few seconds; it's cached
+  afterwards and replays use no data.
+
 ## The idea in one picture
 
 ```
@@ -133,6 +207,16 @@ What's real:
   dispatches DOM touch events for the Pi's panel and reports pointer events instead;
   text selection is off app-wide, since dragging the page used to highlight a track
   title instead of scrolling.
+- **An on-screen keyboard with Pinyin input**
+  (`components/layout/on-screen-keyboard.tsx`) — full-screen, raised by tapping the
+  search field. In-app rather than the system OSK because WebKitGTK raises no keyboard
+  on focus and whether squeekboard/onboard appears depends on session configuration
+  this app doesn't control. The 中 key switches to Pinyin: letters accumulate into an
+  underlined composing buffer and a candidate bar offers words longest-match-first, so
+  `beijingdaxue` offers 北京大学 before 北京. The dictionary is RIME's `pinyin_simp`
+  (Apache 2.0, derived from AOSP's PinyinIME), rebuilt by
+  `scripts/build-pinyin-dict.mjs` into `public/pinyin-dict.json` — ~880KB, **fetched
+  on demand** rather than bundled, so it costs nothing until someone taps 中.
 
 - **Bluetooth / car integration** (`subsystems/media.rs`, via `souvlaki`) — publishes
   an MPRIS service on the session D-Bus, which is what a paired head unit reads over
@@ -212,6 +296,7 @@ src/                    view plane
   lib/innertube/        InnerTube client + parsers (ported from YTMLite)
   lib/lyrics/           LRC parsing + 7 sources (YTM/LRCLIB/Kugou/NetEase/
                          Musixmatch/QQ/Genius) + best-source aggregator
+  lib/pinyin.ts         Pinyin IME lookup (dictionary in public/, fetched lazily)
   bus/                  transport (tauri | mock) + rAF-batched event pump (both buses)
   store/                one store per domain: app (route/online/sidebar), auth,
                          playback, home, explore, search, playlist, album, artist,
