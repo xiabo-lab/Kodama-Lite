@@ -23,6 +23,7 @@ import {
   type LibrarySection,
 } from "@/lib/innertube/library";
 import { hasSession } from "@/lib/innertube/shared";
+import { fetchRadio } from "@/lib/innertube/radio";
 
 /** The Library screen's four tabs. */
 export type LibraryTab = "playlists" | "songs" | "albums" | "artists";
@@ -61,6 +62,8 @@ export type ContentCommand =
   | { type: "album:load"; id: string }
   | { type: "artist:load"; id: string }
   | { type: "library:load"; tab: LibraryTab }
+  /** Fetch tracks similar to `videoId` to extend the queue past its end. */
+  | { type: "radio:load"; videoId: string }
   | {
       type: "lyrics:load";
       videoId: string;
@@ -104,6 +107,11 @@ export type ContentEvent =
       tracks: ShelfItem[];
     }
   | { type: "library:error"; tab: LibraryTab; message: string }
+  /** `seed` is echoed back so a stale station — the user changed track
+   *  while this was in flight — can be dropped rather than appended to a
+   *  queue it has nothing to do with. */
+  | { type: "radio:loaded"; seed: string; tracks: ShelfItem[] }
+  | { type: "radio:error"; seed: string; message: string }
   | { type: "artist:loading"; id: string }
   | { type: "artist:loaded"; id: string; page: ArtistPage }
   | { type: "artist:error"; id: string; message: string }
@@ -290,6 +298,17 @@ async function handle(command: ContentCommand): Promise<void> {
         }
       } catch (e) {
         publish({ type: "library:error", tab, message: errMessage(e) });
+      }
+      return;
+    }
+
+    case "radio:load": {
+      const { videoId } = command;
+      try {
+        const tracks = await fetchRadio(videoId);
+        publish({ type: "radio:loaded", seed: videoId, tracks });
+      } catch (e) {
+        publish({ type: "radio:error", seed: videoId, message: errMessage(e) });
       }
       return;
     }

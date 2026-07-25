@@ -1,4 +1,5 @@
 import {
+  BookmarkIcon,
   DiscIcon,
   ListMusicIcon,
   MusicIcon,
@@ -25,26 +26,51 @@ export function pickThumbnail(thumbnails: YtThumbnail[], targetSize = 256): stri
 
 /**
  * YouTube Music's auto-generated playlists ship **no artwork at all** —
- * the real client draws its own glyph on a flat tile instead, which is why
- * "Liked Music" appears as a thumbs-up there and as an empty grey square
- * here. Match them by id and do the same.
+ * the real client draws its own tile instead: a white glyph centred on a
+ * saturated colour field. That's why "Liked Music" is a blue thumbs-up
+ * there and was an empty grey square here.
  *
- * Ids rather than titles: these are stable across locales, whereas the
- * displayed titles are translated. `LM` is Liked Music (`VL`-prefixed when
- * it arrives as a browseId rather than a playlistId); `SE` is the Shorts
- * sounds shelf ("Sounds from Shorts").
+ * Matched by id first, because ids are stable across locales while the
+ * displayed titles are translated. Titles are a documented fallback: the
+ * ids for the Shorts and podcast shelves aren't as well-known as `LM`, and
+ * a locale-fragile match that works in English beats a blank tile.
  */
-const AUTO_PLAYLIST_ICONS: Record<string, LucideIcon> = {
-  LM: ThumbsUpIcon,
-  VLLM: ThumbsUpIcon,
-  SE: MusicIcon,
-  VLSE: MusicIcon,
+type AutoArt = { icon: LucideIcon; className: string };
+
+/** Blue, as YouTube Music uses for Liked Music. */
+const LIKED_ART: AutoArt = {
+  icon: ThumbsUpIcon,
+  className: "bg-gradient-to-br from-[#3b6fe0] to-[#1b3fa8]",
+};
+const SHORTS_ART: AutoArt = {
+  icon: MusicIcon,
+  className: "bg-gradient-to-br from-[#e04a5f] to-[#a11430]",
+};
+const EPISODES_ART: AutoArt = {
+  icon: BookmarkIcon,
+  className: "bg-gradient-to-br from-[#5b52d8] to-[#2e2793]",
 };
 
+const AUTO_ART_BY_ID: Record<string, AutoArt> = {
+  LM: LIKED_ART,
+  VLLM: LIKED_ART,
+  SE: EPISODES_ART,
+  VLSE: EPISODES_ART,
+};
+
+function autoArtFor(id?: string, title?: string): AutoArt | null {
+  if (id && AUTO_ART_BY_ID[id]) return AUTO_ART_BY_ID[id];
+  const t = title?.toLowerCase() ?? "";
+  if (!t) return null;
+  if (t.includes("liked music") || t.includes("liked songs")) return LIKED_ART;
+  if (t.includes("sounds from shorts")) return SHORTS_ART;
+  if (t.includes("episodes for later")) return EPISODES_ART;
+  return null;
+}
+
 /** Last-resort glyph by entity kind, so nothing ever renders as a blank
- *  tile even when the id isn't one we recognise. */
-function iconFor(kind?: ShelfItem["kind"], id?: string): LucideIcon {
-  if (id && AUTO_PLAYLIST_ICONS[id]) return AUTO_PLAYLIST_ICONS[id];
+ *  tile even when neither the id nor the title is one we recognise. */
+function iconFor(kind?: ShelfItem["kind"]): LucideIcon {
   switch (kind) {
     case "artist":
       return UserRoundIcon;
@@ -67,6 +93,9 @@ type Props = {
    *  shipped no artwork. Optional so existing callers keep working. */
   kind?: ShelfItem["kind"];
   id?: string;
+  /** Title, used only to recognise an auto-playlist when its id isn't a
+   *  known one. Defaults to `alt`, which is the title at every call site. */
+  title?: string;
 };
 
 export function Thumbnail({
@@ -77,14 +106,20 @@ export function Thumbnail({
   targetSize = 256,
   kind,
   id,
+  title,
 }: Props) {
   const src = pickThumbnail(thumbnails, targetSize);
-  const Icon = iconFor(kind, id);
+  const auto = src ? null : autoArtFor(id, title ?? alt);
+  const Icon = auto?.icon ?? iconFor(kind);
 
   return (
     <div
       className={cn(
-        "relative flex items-center justify-center overflow-hidden bg-muted",
+        "relative flex items-center justify-center overflow-hidden",
+        // A real auto-playlist tile is a full-bleed colour field with a
+        // white glyph, like the YouTube Music app — not a grey box with a
+        // small muted icon, which reads as "image failed to load".
+        auto ? auto.className : "bg-muted",
         round ? "rounded-full" : "rounded-md",
         className,
       )}
@@ -99,7 +134,17 @@ export function Thumbnail({
           className="size-full object-cover"
         />
       ) : (
-        <Icon className="size-2/5 text-muted-foreground" aria-hidden="true" />
+        <Icon
+          className={cn(
+            auto ? "size-1/2 text-white" : "size-2/5 text-muted-foreground",
+          )}
+          // The glyph IS the artwork here, so give it the alt text rather
+          // than hiding it — a screen reader otherwise reaches a tile with
+          // no accessible content at all.
+          aria-label={auto ? alt : undefined}
+          aria-hidden={auto ? undefined : true}
+          strokeWidth={auto ? 2.25 : 2}
+        />
       )}
     </div>
   );

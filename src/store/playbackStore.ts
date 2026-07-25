@@ -57,6 +57,10 @@ interface PlaybackState {
   removeAt: (index: number) => void;
   /** Drop everything after the current track. */
   clearQueue: () => void;
+  /** Append tracks to the end of the queue without disturbing playback.
+   *  Used by the radio continuation. Dedupes against what's already
+   *  queued so a re-fetch can't stack the same station twice. */
+  appendToQueue: (tracks: Track[]) => void;
   toggle: () => void;
   /** Start the current track, resolving its stream first if it hasn't
    *  been. Needed because a queue restored from the last session has a
@@ -189,6 +193,19 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
       const nextQueue = queue.slice(0, index + 1);
       set({ queue: nextQueue });
       saveQueueCache(nextQueue, index);
+    },
+
+    appendToQueue: (tracks) => {
+      if (tracks.length === 0) return;
+      const { queue, index } = get();
+      const seen = new Set(queue.map((t) => t.videoId));
+      const fresh = tracks.filter((t) => !seen.has(t.videoId));
+      if (fresh.length === 0) return;
+      const nextQueue = [...queue, ...fresh];
+      set({ queue: nextQueue });
+      saveQueueCache(nextQueue, index);
+      // The appended track is now the one after the current, so warm it.
+      prefetchNext(nextQueue, index);
     },
 
     // Pausing is a pure flag flip; starting goes through `resume` so the

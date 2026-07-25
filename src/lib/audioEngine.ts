@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { dispatch } from "@/bus/bus";
+import { dispatchContent } from "@/lib/network";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useSettingsStore } from "@/store/settingsStore";
 
@@ -83,6 +84,31 @@ export function useAudioEngine(): void {
     const id = window.setInterval(push, 2000);
     return () => window.clearInterval(id);
   }, [track, playingForMedia, durationForMedia]);
+
+  // ── Radio continuation ──────────────────────────────────────────────
+  //
+  // Extend the queue with similar tracks once the current one is the last
+  // queued, so playback carries on past the end instead of stopping — the
+  // behaviour the YouTube Music app has when you start a single song.
+  // Fired at the *start* of the last track rather than when it ends, so
+  // the next track is already queued and prefetched by the time it's
+  // needed and there's no gap.
+  const autoRadio = useSettingsStore((s) => s.autoRadio);
+  const queueLen = usePlaybackStore((s) => s.queue.length);
+  const queueIndex = usePlaybackStore((s) => s.index);
+  const seedVideoId = usePlaybackStore((s) =>
+    s.index >= 0 ? s.queue[s.index]?.videoId : undefined,
+  );
+  const radioFetchedForRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!autoRadio) return;
+    if (queueIndex < 0 || !seedVideoId) return;
+    // Only when the current track is the last one queued.
+    if (queueIndex < queueLen - 1) return;
+    if (radioFetchedForRef.current === seedVideoId) return;
+    radioFetchedForRef.current = seedVideoId;
+    dispatchContent({ type: "radio:load", videoId: seedVideoId });
+  }, [autoRadio, queueIndex, queueLen, seedVideoId]);
 
   // The element itself: created once, torn down on unmount.
   useEffect(() => {

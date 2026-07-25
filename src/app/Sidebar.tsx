@@ -52,13 +52,21 @@ export function Sidebar() {
       // with the collapsed class applied. Caught in-browser: the class
       // said `w-16` while the computed width sat at 208px until the
       // transition was forcibly removed. Snapping can't get stuck.
+      // `overflow-y-auto` is a safety net, not the plan: at 24px type the
+      // nav is 368px tall in a 297px rail, so without the `short:`
+      // tightening below the Sign in button falls off the bottom of the
+      // Pi's panel entirely. The scroll only catches whatever the
+      // tightening doesn't.
       className={cn(
-        "flex shrink-0 flex-col gap-1 border-r border-sidebar-border bg-sidebar pb-3 pt-3",
+        "flex shrink-0 flex-col gap-1 overflow-y-auto border-r border-sidebar-border bg-sidebar pb-3 pt-3 short:gap-0.5",
         collapsed ? "w-16 px-2" : "w-52 px-3",
       )}
     >
+      {/* The caption is the first thing to go on a short panel — it costs a
+          32px row at this type size and labels a list of four obvious
+          items. */}
       {!collapsed && (
-        <span className="px-2 pb-1 text-xs font-medium text-muted-foreground">
+        <span className="px-2 pb-1 text-xs font-medium text-muted-foreground short:hidden">
           Browse
         </span>
       )}
@@ -69,7 +77,7 @@ export function Sidebar() {
           title={collapsed ? label : undefined}
           aria-label={label}
           className={cn(
-            "flex items-center gap-3 rounded-md py-2 text-sm font-medium transition-colors",
+            "flex items-center gap-3 rounded-md py-2 text-sm font-medium transition-colors short:py-1",
             collapsed ? "justify-center px-0" : "px-2",
             route.kind === r.kind
               ? "bg-accent text-accent-foreground"
@@ -89,7 +97,7 @@ export function Sidebar() {
         title={collapsed ? "Settings" : undefined}
         aria-label="Settings"
         className={cn(
-          "mt-auto flex items-center gap-3 rounded-md py-2 text-sm font-medium transition-colors",
+          "mt-auto flex items-center gap-3 rounded-md py-2 text-sm font-medium transition-colors short:py-1",
           collapsed ? "justify-center px-0" : "px-2",
           route.kind === "settings"
             ? "bg-accent text-accent-foreground"
@@ -134,7 +142,7 @@ export function Sidebar() {
             title={collapsed ? "Sign in" : undefined}
             aria-label="Sign in"
             className={cn(
-              "flex w-full items-center justify-center gap-2 rounded-md bg-brand py-2.5 text-sm font-medium text-white transition-colors hover:bg-brand/90 disabled:opacity-60",
+              "flex w-full items-center justify-center gap-2 rounded-md bg-brand py-2.5 text-sm font-medium text-white transition-colors hover:bg-brand/90 disabled:opacity-60 short:py-1.5",
               collapsed ? "px-0" : "px-3",
             )}
           >

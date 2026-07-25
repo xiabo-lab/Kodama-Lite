@@ -9,8 +9,6 @@ import {
   ShuffleIcon,
   SkipBackIcon,
   SkipForwardIcon,
-  Volume2Icon,
-  VolumeXIcon,
 } from "lucide-react";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
@@ -47,7 +45,6 @@ export function PlayerBar() {
   const prev = usePlaybackStore((s) => s.prev);
   const seek = usePlaybackStore((s) => s.seek);
   const setVolume = usePlaybackStore((s) => s.setVolume);
-  const toggleMute = usePlaybackStore((s) => s.toggleMute);
   const setShuffle = usePlaybackStore((s) => s.setShuffle);
   const cycleRepeat = usePlaybackStore((s) => s.cycleRepeat);
   const setKaraokeOpen = useKaraokeStore((s) => s.setOpen);
@@ -66,7 +63,6 @@ export function PlayerBar() {
     seek(fraction * duration);
   };
 
-  const VolumeIcon = muted || volume === 0 ? VolumeXIcon : Volume2Icon;
 
   return (
     <aside className="relative z-10 mx-2 mb-2 flex shrink-0 flex-col gap-2 rounded-[10px] border border-sidebar-border bg-surface px-4 py-2.5 shadow-sm">
@@ -105,7 +101,7 @@ export function PlayerBar() {
             aria-pressed={shuffle}
             onClick={() => setShuffle(!shuffle)}
           >
-            <ShuffleIcon className="size-5" />
+            <ShuffleIcon className="size-10" />
           </button>
           <button
             className={ICON_BTN}
@@ -113,20 +109,20 @@ export function PlayerBar() {
             disabled={!hasTrack}
             onClick={prev}
           >
-            <SkipBackIcon className="size-5 fill-current" />
+            <SkipBackIcon className="size-10 fill-current" />
           </button>
           <button
-            className="flex size-12 items-center justify-center rounded-full bg-brand text-white transition-colors hover:bg-brand/90 disabled:pointer-events-none disabled:opacity-50"
+            className="flex size-18 items-center justify-center rounded-full bg-brand text-white transition-colors hover:bg-brand/90 disabled:pointer-events-none disabled:opacity-50"
             aria-label={playing ? "Pause" : "Play"}
             disabled={!hasTrack}
             onClick={toggle}
           >
             {loading ? (
-              <Loader2Icon className="size-5 animate-spin" />
+              <Loader2Icon className="size-10 animate-spin" />
             ) : playing ? (
-              <PauseIcon className="size-5 fill-current" />
+              <PauseIcon className="size-10 fill-current" />
             ) : (
-              <PlayIcon className="size-5 fill-current" />
+              <PlayIcon className="size-10 fill-current" />
             )}
           </button>
           <button
@@ -135,7 +131,7 @@ export function PlayerBar() {
             disabled={!hasTrack}
             onClick={next}
           >
-            <SkipForwardIcon className="size-5 fill-current" />
+            <SkipForwardIcon className="size-10 fill-current" />
           </button>
           <button
             className={cn(ICON_BTN, repeat !== "off" && "text-brand")}
@@ -144,9 +140,9 @@ export function PlayerBar() {
             onClick={cycleRepeat}
           >
             {repeat === "one" ? (
-              <Repeat1Icon className="size-5" />
+              <Repeat1Icon className="size-10" />
             ) : (
-              <RepeatIcon className="size-5" />
+              <RepeatIcon className="size-10" />
             )}
           </button>
           <button
@@ -155,20 +151,23 @@ export function PlayerBar() {
             disabled={!hasTrack}
             onClick={() => setKaraokeOpen(true)}
           >
-            <Maximize2Icon className="size-5" />
+            <Maximize2Icon className="size-10" />
           </button>
           {/* The mic is the lyrics-*source* picker, not a second way into
               the karaoke stage — the expand icon to its left is that, and
               having both open the same overlay made one of them dead
               weight. */}
           <LyricsSourceButton
-            className={cn(ICON_BTN, "[&_svg]:size-5")}
+            className={cn(ICON_BTN, "[&_svg]:size-10")}
             disabled={!hasTrack}
           />
-          <QueueButton className={cn(ICON_BTN, "flex items-center justify-center")} />
-          <button className={ICON_BTN} aria-label={muted ? "Unmute" : "Mute"} onClick={toggleMute}>
-            <VolumeIcon className="size-5" />
-          </button>
+          <QueueButton
+            className={cn(ICON_BTN, "flex items-center justify-center [&_svg]:size-10")}
+          />
+          {/* No mute button: at this length the slider is a faster way to
+              silence it than a toggle, and `setVolume` clears `muted`, so
+              dragging back up always restores sound even if something else
+              (the karaoke bar's own mute) set it. */}
           <input
             type="range"
             min={0}
@@ -176,7 +175,7 @@ export function PlayerBar() {
             value={muted ? 0 : Math.round(volume * 100)}
             onChange={(e) => setVolume(Number(e.target.value) / 100)}
             aria-label="Volume"
-            className="h-1.5 w-16 accent-brand"
+            className="h-3 w-[368px] accent-brand"
           />
         </div>
       </div>

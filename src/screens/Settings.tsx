@@ -5,6 +5,7 @@ import {
   LogOutIcon,
   MicVocalIcon,
   PaletteIcon,
+  RadioIcon,
   RotateCcwIcon,
   TimerIcon,
   Trash2Icon,
@@ -130,6 +131,8 @@ function AppearanceSection() {
 function PlaybackSection() {
   const resumeOnStartup = useSettingsStore((s) => s.resumeOnStartup);
   const setResumeOnStartup = useSettingsStore((s) => s.setResumeOnStartup);
+  const autoRadio = useSettingsStore((s) => s.autoRadio);
+  const setAutoRadio = useSettingsStore((s) => s.setAutoRadio);
   return (
     <>
       <SectionTitle>Playback</SectionTitle>
@@ -143,6 +146,18 @@ function PlaybackSection() {
               checked={resumeOnStartup}
               onChange={setResumeOnStartup}
               ariaLabel="Resume playback on startup"
+            />
+          }
+        />
+        <SettingRow
+          icon={RadioIcon}
+          title="Autoplay similar songs"
+          description="When the queue runs out, keep playing with songs similar to the last one — the way the YouTube Music app turns a single track into a station instead of falling silent."
+          control={
+            <Switch
+              checked={autoRadio}
+              onChange={setAutoRadio}
+              ariaLabel="Autoplay similar songs when the queue ends"
             />
           }
         />
@@ -165,10 +180,10 @@ function LyricsTimingSection() {
             <TimerIcon className="size-[18px] text-muted-foreground" />
           </div>
           <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="text-[15px] font-medium leading-none">
+            <span className="text-[24px] font-medium leading-none">
               Lyrics offset
             </span>
-            <span className="text-[13px] text-muted-foreground">
+            <span className="text-[24px] text-muted-foreground">
               Shift the lyrics to line up with the audio you actually hear over
               Bluetooth. Positive delays the lyrics to match late audio;
               negative moves them earlier.

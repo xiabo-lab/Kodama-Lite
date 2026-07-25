@@ -30,9 +30,17 @@ interface SettingsState {
    *  beginning rather than where it was interrupted. Aimed at the in-car
    *  Pi, which boots straight into the app. */
   resumeOnStartup: boolean;
+  /** Keep playing past the end of the queue with tracks similar to the
+   *  last one — the behaviour the YouTube Music app has, where starting
+   *  one song from Listen Again turns into a station rather than stopping
+   *  after three minutes. On by default, because that's what people
+   *  expect from a music app and the alternative is silence in a moving
+   *  car. */
+  autoRadio: boolean;
   setTheme: (theme: ThemeMode) => void;
   setLyricsOffsetSec: (v: number) => void;
   setResumeOnStartup: (v: boolean) => void;
+  setAutoRadio: (v: boolean) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -41,6 +49,7 @@ export const useSettingsStore = create<SettingsState>()(
       theme: "dark",
       lyricsOffsetSec: 0,
       resumeOnStartup: false,
+      autoRadio: true,
       setTheme: (theme) => set({ theme }),
       // Clamp to ±3.0s and snap to 0.1s so persisted values and any
       // programmatic caller stay inside the slider's contract.
@@ -49,6 +58,7 @@ export const useSettingsStore = create<SettingsState>()(
           lyricsOffsetSec: Math.round(Math.min(3, Math.max(-3, v)) * 10) / 10,
         }),
       setResumeOnStartup: (resumeOnStartup) => set({ resumeOnStartup }),
+      setAutoRadio: (autoRadio) => set({ autoRadio }),
     }),
     { name: "kl:settings" },
   ),

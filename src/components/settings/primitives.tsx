@@ -35,9 +35,9 @@ export function SettingRow({
         <Icon className="size-[18px] text-muted-foreground" />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-[15px] font-medium leading-none">{title}</span>
+        <span className="text-[24px] font-medium leading-none">{title}</span>
         {description ? (
-          <span className="text-[13px] text-muted-foreground">
+          <span className="text-[24px] text-muted-foreground">
             {description}
           </span>
         ) : null}

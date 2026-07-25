@@ -99,6 +99,28 @@
   --color-hairline: var(--hairline);
   --radius-lg: 0.625rem;
   --radius-md: 0.5rem;
+
+  /* Type scale: everything Tailwind sized at or below 16px is now a flat
+   * 24px.
+   *
+   * The in-car display is read at arm's length in a moving vehicle, where
+   * the defaults (12/14/16px) are too small to take in at a glance. The
+   * three small steps are deliberately collapsed to ONE size rather than
+   * scaled proportionally — at this distance the difference between 18
+   * and 24px is legibility, not hierarchy, so there's no reason for a
+   * timestamp to be smaller than an artist name. Hierarchy still exists
+   * above this: `text-lg` and up are headings and keep their own sizes.
+   *
+   * Done here rather than at the call sites because it's one place to
+   * tune and one to revert, and it catches every component at once —
+   * including ones added later.
+   */
+  --text-xs: 1.5rem; /* 12px -> 24px */
+  --text-xs--line-height: 2rem;
+  --text-sm: 1.5rem; /* 14px -> 24px */
+  --text-sm--line-height: 2rem;
+  --text-base: 1.5rem; /* 16px -> 24px */
+  --text-base--line-height: 2rem;
 }
 
 @layer base {

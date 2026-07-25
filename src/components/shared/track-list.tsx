@@ -170,7 +170,7 @@ function TrackRow({ track: t, idx, tracks, gridTemplate, hideThumbnails, showAlb
           {t.explicit ? (
             <span
               title="Explicit"
-              className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm bg-muted text-[10px] font-bold leading-none text-muted-foreground"
+              className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm bg-muted text-[15px] font-bold leading-none text-muted-foreground"
             >
               E
             </span>
