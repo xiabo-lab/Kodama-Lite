@@ -1,10 +1,13 @@
+import { useEffect, useState } from "react";
 import {
   DatabaseIcon,
   LogInIcon,
   LogOutIcon,
+  MicVocalIcon,
   PaletteIcon,
   RotateCcwIcon,
   TimerIcon,
+  Trash2Icon,
   UserRoundIcon,
 } from "lucide-react";
 import {
@@ -16,6 +19,8 @@ import {
 } from "@/components/settings/primitives";
 import { useSettingsStore, type ThemeMode } from "@/store/settingsStore";
 import { useAuthStore } from "@/store/authStore";
+import { formatBytes, useCacheStore } from "@/store/cacheStore";
+import { clearLyricsCache, lyricsCacheStats } from "@/store/lyricsStore";
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: "light", label: "Light" },
@@ -206,29 +211,75 @@ function LyricsTimingSection() {
 }
 
 /**
- * YTMLite's Storage tab is a full cache manager: per-track cache listing,
- * a movable cache directory, cover-art stats, bulk delete and a scheduled
- * sweep that protects anything in your library. All of it is a UI over
- * seven Rust commands (`list_cache`, `get_cache_dir`, `set_cache_dir`,
- * `pick_cache_folder`, `delete_cache_entries`, `cover_cache_stats`,
- * `clear_cover_cache`) that Kodama-Lite's playback subsystem does not
- * expose — it caches streams, but has no inventory, no relocation and no
- * deletion API behind the bus.
+ * Storage. Both caches are real and both make a replayed track cost no
+ * data: the stream server writes every played track to disk as
+ * `<app-cache>/stream/<videoId>.webm` and serves later plays from it, and
+ * `lyricsStore` keeps the full per-source lyrics map in localStorage.
  *
- * Rendering the controls anyway would mean shipping a folder picker that
- * picks nothing and a "Clear cache" button that frees nothing, so the
- * section says what's missing instead. This is the one part of "same as
- * YTMLite" that isn't.
+ * Smaller than YTMLite's tab, which also lists per-track entries by
+ * title, relocates the cache directory and runs a scheduled sweep that
+ * spares anything in your library. Those need a title sidecar, a folder
+ * picker and a library round-trip; size-and-clear is the part that
+ * answers "how much space is this using and how do I get it back".
  */
 function StorageSection() {
+  const count = useCacheStore((s) => s.count);
+  const bytes = useCacheStore((s) => s.bytes);
+  const dir = useCacheStore((s) => s.dir);
+  const loading = useCacheStore((s) => s.loading);
+  const refresh = useCacheStore((s) => s.refresh);
+  const clearAudio = useCacheStore((s) => s.clear);
+
+  const [lyrics, setLyrics] = useState(() => lyricsCacheStats());
+
+  // Ask once when the screen mounts. Cheap (a directory stat), and the
+  // numbers are stale the moment anything plays.
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
   return (
     <>
       <SectionTitle>Storage</SectionTitle>
       <Group>
         <SettingRow
           icon={DatabaseIcon}
-          title="Cache management isn't available yet"
-          description="Downloaded tracks are cached automatically, but moving the cache folder, browsing what's in it and clearing it need data-plane commands that haven't been built here yet. Nothing on this screen would do anything, so there's nothing on it."
+          title="Cached audio"
+          description={
+            count === undefined
+              ? "Checking…"
+              : `${count} track${count === 1 ? "" : "s"} · ${formatBytes(bytes ?? 0)}. Played tracks are saved here automatically, so playing them again uses no data.${dir ? ` Stored in ${dir}.` : ""}`
+          }
+          control={
+            <button
+              type="button"
+              disabled={loading || !count}
+              onClick={clearAudio}
+              className="flex min-h-11 shrink-0 items-center gap-2 rounded-md border border-input px-4 text-sm font-medium transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40"
+            >
+              <Trash2Icon className="size-4" />
+              Clear
+            </button>
+          }
+        />
+        <SettingRow
+          icon={MicVocalIcon}
+          title="Cached lyrics"
+          description={`${lyrics.count} track${lyrics.count === 1 ? "" : "s"} · ${formatBytes(lyrics.bytes)}. Every source's lyrics are kept, so switching source on a saved track works offline too.`}
+          control={
+            <button
+              type="button"
+              disabled={!lyrics.count}
+              onClick={() => {
+                clearLyricsCache();
+                setLyrics(lyricsCacheStats());
+              }}
+              className="flex min-h-11 shrink-0 items-center gap-2 rounded-md border border-input px-4 text-sm font-medium transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40"
+            >
+              <Trash2Icon className="size-4" />
+              Clear
+            </button>
+          }
         />
       </Group>
     </>

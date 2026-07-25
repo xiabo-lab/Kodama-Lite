@@ -110,6 +110,8 @@ export function ShelfCard({ item, className }: Props) {
           round={item.round}
           className={cn("size-full", radiusClass)}
           targetSize={isVideo ? 480 : 256}
+          kind={item.kind}
+          id={item.id}
         />
         <div
           aria-hidden="true"

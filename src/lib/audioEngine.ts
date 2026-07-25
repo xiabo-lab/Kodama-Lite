@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { dispatch } from "@/bus/bus";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useSettingsStore } from "@/store/settingsStore";
 
@@ -46,6 +47,42 @@ export function useAudioEngine(): void {
     if (s.playing) return;
     s.resume();
   }, [ytdlpPhase]);
+
+  // ── OS media controls (MPRIS → Bluetooth AVRCP → the car) ───────────
+  //
+  // Pushed on track / play-state / duration change, plus a light 2s
+  // refresh while playing so the head unit's scrubber doesn't drift and
+  // a seek shows up. Not on every `timeupdate`: that's ~4 D-Bus round
+  // trips a second for a scrubber the client interpolates anyway.
+  // Values are read imperatively so this sync never re-triggers the
+  // resolve/playback effects below.
+  const track = usePlaybackStore((s) => (s.index >= 0 ? s.queue[s.index] : undefined));
+  const playingForMedia = usePlaybackStore((s) => s.playing);
+  const durationForMedia = usePlaybackStore((s) => s.duration);
+  useEffect(() => {
+    const push = () => {
+      const s = usePlaybackStore.getState();
+      const t = s.index >= 0 ? s.queue[s.index] : undefined;
+      if (!t) {
+        dispatch({ type: "media:clear" });
+        return;
+      }
+      dispatch({
+        type: "media:update",
+        title: t.title,
+        artist: t.subtitle ?? "",
+        album: "",
+        thumbnail: t.thumbnail ?? "",
+        duration: Number.isFinite(s.duration) ? s.duration : 0,
+        elapsed: s.position,
+        paused: !s.playing,
+      });
+    };
+    push();
+    if (!playingForMedia) return;
+    const id = window.setInterval(push, 2000);
+    return () => window.clearInterval(id);
+  }, [track, playingForMedia, durationForMedia]);
 
   // The element itself: created once, torn down on unmount.
   useEffect(() => {

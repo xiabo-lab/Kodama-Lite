@@ -134,12 +134,24 @@ What's real:
   text selection is off app-wide, since dragging the page used to highlight a track
   title instead of scrolling.
 
+- **Bluetooth / car integration** (`subsystems/media.rs`, via `souvlaki`) — publishes
+  an MPRIS service on the session D-Bus, which is what a paired head unit reads over
+  AVRCP for its "now playing" text and its transport buttons. Without it a car sees
+  nothing at all, whatever the app is doing. Button presses come back up the bus as
+  `media:control` and drive the same store actions the on-screen buttons do, so the
+  car and the UI can't diverge. Needs a session D-Bus: a desktop login has one, bare
+  SSH doesn't, and the failure is logged and skipped rather than fatal.
+- **Offline replay** — the stream server has always written played tracks to
+  `<app-cache>/stream/<videoId>.webm` and served later plays from disk; lyrics now
+  cache the same way (`lyricsStore`, whole per-source map, 300-track cap), so
+  replaying a track costs no data at all. Settings → Storage shows both and clears
+  either.
+
 What's deliberately cut (all disclosed in-line where they'd otherwise be expected):
-- **The Storage settings tab.** YTMLite's is a full cache manager over seven Rust
-  commands (`list_cache`, `get_cache_dir`, `set_cache_dir`, `pick_cache_folder`,
-  `delete_cache_entries`, `cover_cache_stats`, `clear_cover_cache`) that this
-  playback subsystem doesn't expose. The section says so rather than shipping a
-  folder picker that picks nothing.
+- **The rest of YTMLite's Storage tab** — per-track cache listing by title, a
+  relocatable cache directory, and the scheduled sweep that spares library tracks.
+  Those need a title sidecar, a folder picker and a library round-trip; size-and-clear
+  is what answers "how much space is this using and how do I get it back".
 - **Playlist/album/artist headers** render as a plain inline block instead of
   YTMLite's title-bar-integrated hero header — same data, simpler placement (see
   `components/shared/entity-header.tsx`).
@@ -215,7 +227,8 @@ src-tauri/src/          data plane (connectivity + local audio-streaming server 
   protocol.rs           Rust mirror of the Rust-routed half of the contract
   bus.rs                command router + event emitter
   ytdlp.rs              managed yt-dlp binary lifecycle (ported from YTMLite)
-  subsystems/           auth (login webview + cookie-jar read), connectivity,
+  subsystems/           auth (login webview + cookie-jar read), cache (audio
+                         inventory), connectivity, media (MPRIS → Bluetooth),
                          playback (+ its local stream server)
 Reference Project/      Kodama (read-only architecture reference)
 DESIGN.md               architecture proposal

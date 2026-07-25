@@ -4,6 +4,7 @@ import type { AppEvent } from "@/protocol";
 import { startContentBus, dispatchContent, type ContentEvent } from "@/lib/network";
 import { useAppStore } from "@/store/appStore";
 import { useAuthStore } from "@/store/authStore";
+import { useCacheStore } from "@/store/cacheStore";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useHomeStore } from "@/store/homeStore";
 import { useExploreStore } from "@/store/exploreStore";
@@ -32,6 +33,7 @@ export default function App() {
   const applyEvents = useCallback((events: AppEvent[]) => {
     useAppStore.getState().applyEvents(events);
     useAuthStore.getState().applyEvents(events);
+    useCacheStore.getState().applyEvents(events);
     usePlaybackStore.getState().applyEvents(events);
   }, []);
 

@@ -287,6 +287,35 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
           case "ytdlp:state":
             set({ ytdlpPhase: e.phase });
             break;
+          // A transport button pressed in the car (or `playerctl`). These
+          // drive exactly the same store actions the on-screen buttons
+          // do, so there is one implementation of "next" and the car can
+          // never diverge from the UI. `play` goes through `resume` for
+          // the same reason `toggle` does — the track may not have a
+          // resolved stream yet.
+          case "media:control":
+            switch (e.action) {
+              case "play":
+                get().resume();
+                break;
+              case "pause":
+              case "stop":
+                set({ playing: false });
+                break;
+              case "toggle":
+                get().toggle();
+                break;
+              case "next":
+                get().next();
+                break;
+              case "previous":
+                get().prev();
+                break;
+              case "seek":
+                if (typeof e.position === "number") get().seek(e.position);
+                break;
+            }
+            break;
           default:
             break;
         }

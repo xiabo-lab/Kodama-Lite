@@ -54,6 +54,7 @@ export function Album({ id }: { id: string }) {
         subtitle={data.artists.map((a) => a.name).join(", ")}
         metadata={metadataParts}
         thumbnails={data.thumbnails}
+        kind="album"
         onPlay={() => {
           if (tracksWithCover.length === 0) return;
           usePlaybackStore.getState().playQueue(tracksWithCover.map(shelfItemToTrack), 0);

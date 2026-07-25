@@ -1,6 +1,6 @@
 [package]
 name = "kodama-lite"
-version = "0.1.5"
+version = "0.1.6"
 description = "Kodama-Lite — a fluid, decoupled YouTube Music client for the Raspberry Pi 5"
 authors = ["xiabo-lab"]
 license = "GPL-3.0-only"
@@ -40,6 +40,12 @@ tauri-plugin-http = { version = "2", default-features = false, features = [
     "http2",
     "charset",
 ] }
+# OS media controls. On Linux this publishes an MPRIS service on the
+# session D-Bus — the only thing a car head unit reads over Bluetooth
+# AVRCP for "now playing" text and transport buttons. Without it a paired
+# Tesla sees no metadata and its next/prev/play-pause do nothing, which is
+# exactly the reported symptom. See subsystems/media.rs.
+souvlaki = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = [

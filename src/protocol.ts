@@ -29,7 +29,26 @@ export type Command =
   /** Open the Google sign-in webview and watch for the session cookies. */
   | { type: "auth:signIn" }
   /** Drop every Google/YouTube cookie from the jar. */
-  | { type: "auth:signOut" };
+  | { type: "auth:signOut" }
+  /** Publish the current track + transport state to the OS media
+   *  controls (MPRIS on Linux). This is what a car head unit reads over
+   *  Bluetooth AVRCP — see `subsystems/media.rs`. */
+  | {
+      type: "media:update";
+      title: string;
+      artist: string;
+      album: string;
+      thumbnail: string;
+      duration: number;
+      elapsed: number;
+      paused: boolean;
+    }
+  /** Tell the OS nothing is playing (queue emptied). */
+  | { type: "media:clear" }
+  /** How much audio is on disk, and where. */
+  | { type: "cache:stats" }
+  /** Delete every cached audio file. */
+  | { type: "cache:clear" };
 
 // ── Events: data plane → view plane ───────────────────────────────────
 
@@ -54,7 +73,16 @@ export type AppEvent =
       cookie?: string;
       sapisid?: string;
     }
-  | { type: "auth:error"; message: string };
+  | { type: "auth:error"; message: string }
+  /** A transport button pressed on the OS media controls — the steering
+   *  wheel / touchscreen in the car, or `playerctl`. `position` is only
+   *  present for `seek`. */
+  | {
+      type: "media:control";
+      action: "play" | "pause" | "toggle" | "next" | "previous" | "stop" | "seek";
+      position?: number;
+    }
+  | { type: "cache:stats"; count: number; bytes: number; dir: string };
 
 /** Wire names (kept in one place so both transports agree). `CMD_CHANNEL`
  *  is the Tauri command that receives every dispatch; `EVENT_CHANNEL` is the

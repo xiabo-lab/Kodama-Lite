@@ -171,7 +171,7 @@ function TopResultHero({ item, action }: { item: ShelfItem; action?: TopResultAc
         className="relative flex items-center gap-5 rounded-xl border bg-card/40 p-4 pr-5 text-left transition-colors hover:bg-white/[0.06]"
       >
         <div className={cn("relative size-24 shrink-0 md:size-28", radius)}>
-          <Thumbnail thumbnails={item.thumbnails} alt={item.title} round={item.round} className={cn("size-full", radius)} targetSize={320} />
+          <Thumbnail thumbnails={item.thumbnails} alt={item.title} round={item.round} className={cn("size-full", radius)} targetSize={320} kind={item.kind} id={item.id} />
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="truncate text-3xl font-bold tracking-tight">{item.title}</span>

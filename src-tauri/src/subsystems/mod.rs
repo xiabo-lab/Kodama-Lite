@@ -8,7 +8,9 @@
 //! here to mirror it.
 
 pub mod auth;
+pub mod cache;
 pub mod connectivity;
+pub mod media;
 pub mod playback;
 
 use tauri::AppHandle;

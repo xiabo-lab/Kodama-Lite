@@ -42,6 +42,25 @@ pub enum Command {
     /// Drop every Google/YouTube cookie from the jar.
     #[serde(rename = "auth:signOut")]
     AuthSignOut,
+    /// Publish the current track + transport state to the OS media
+    /// controls (MPRIS on Linux) — what a car head unit reads over
+    /// Bluetooth AVRCP.
+    #[serde(rename = "media:update")]
+    MediaUpdate {
+        title: String,
+        artist: String,
+        album: String,
+        thumbnail: String,
+        duration: f64,
+        elapsed: f64,
+        paused: bool,
+    },
+    #[serde(rename = "media:clear")]
+    MediaClear,
+    #[serde(rename = "cache:stats")]
+    CacheStats,
+    #[serde(rename = "cache:clear")]
+    CacheClear,
 }
 
 // ── Events: data plane → view plane ───────────────────────────────────
@@ -86,4 +105,17 @@ pub enum AppEvent {
     },
     #[serde(rename = "auth:error")]
     AuthError { message: String },
+    /// A transport button pressed on the OS media controls.
+    #[serde(rename = "media:control")]
+    MediaControl {
+        action: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        position: Option<f64>,
+    },
+    #[serde(rename = "cache:stats")]
+    CacheStatsReport {
+        count: u64,
+        bytes: u64,
+        dir: String,
+    },
 }

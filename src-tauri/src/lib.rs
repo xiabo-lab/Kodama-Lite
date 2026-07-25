@@ -40,6 +40,10 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .setup(|app| {
             subsystems::playback::start(app.handle());
+            // MPRIS must be created on the main thread — souvlaki's
+            // MediaControls is neither Send nor Sync. `setup` is that
+            // thread, so this is the only place it can be built.
+            subsystems::media::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![bus::handle_command])

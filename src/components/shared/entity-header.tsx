@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { PlayIcon, ShuffleIcon } from "lucide-react";
 import { Thumbnail } from "@/components/shared/thumbnail";
-import type { Thumbnail as YtThumbnail } from "@/lib/innertube/types";
+import type { ShelfItem, Thumbnail as YtThumbnail } from "@/lib/innertube/types";
 
 type Props = {
   title: string;
@@ -10,6 +10,10 @@ type Props = {
   description?: string;
   thumbnails: YtThumbnail[];
   round?: boolean;
+  /** Entity kind + id, so an artwork-less auto-playlist (Liked Music)
+   *  gets its glyph here too, not just on the card that links to it. */
+  kind?: ShelfItem["kind"];
+  id?: string;
   onPlay?: () => void;
   onShuffle?: () => void;
   actions?: ReactNode;
@@ -23,11 +27,11 @@ type Props = {
  * information (cover, title, subtitle, Play/Shuffle) as a plain block at
  * the top of the content column instead — same data, simpler placement.
  */
-export function EntityHeader({ title, subtitle, metadata, description, thumbnails, round = false, onPlay, onShuffle, actions }: Props) {
+export function EntityHeader({ title, subtitle, metadata, description, thumbnails, round = false, kind, id, onPlay, onShuffle, actions }: Props) {
   return (
     <div className="flex flex-col gap-4 md:flex-row md:items-end">
       <div className={round ? "size-40 shrink-0 md:size-48" : "aspect-square w-40 shrink-0 md:w-56"}>
-        <Thumbnail thumbnails={thumbnails} alt={title} round={round} className="size-full" targetSize={512} />
+        <Thumbnail thumbnails={thumbnails} alt={title} round={round} className="size-full" targetSize={512} kind={kind} id={id} />
       </div>
       <div className="flex min-w-0 flex-col gap-2">
         <h1 className="text-3xl font-bold tracking-tight md:text-4xl">{title}</h1>

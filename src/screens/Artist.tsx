@@ -45,7 +45,7 @@ export function Artist({ id }: { id: string }) {
 
   return (
     <div className="flex flex-col gap-8 px-6 pb-6 pt-3">
-      <EntityHeader title={data.name} subtitle={data.subscribers} description={data.description} thumbnails={data.thumbnails} round />
+      <EntityHeader title={data.name} subtitle={data.subscribers} description={data.description} thumbnails={data.thumbnails} round kind="artist" />
 
       {data.shelves.map((shelf) => (shelf.display === "list" ? <ListShelf key={shelf.id} shelf={shelf} /> : <ShelfCarousel key={shelf.id} shelf={shelf} />))}
     </div>

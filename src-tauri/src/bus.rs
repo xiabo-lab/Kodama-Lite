@@ -31,5 +31,19 @@ pub async fn handle_command(app: AppHandle, command: Command) {
         Command::AuthCheck => subsystems::auth::check(&app),
         Command::AuthSignIn => subsystems::auth::sign_in(&app),
         Command::AuthSignOut => subsystems::auth::sign_out(&app),
+        Command::MediaUpdate {
+            title,
+            artist,
+            album,
+            thumbnail,
+            duration,
+            elapsed,
+            paused,
+        } => subsystems::media::update(
+            &app, title, artist, album, thumbnail, duration, elapsed, paused,
+        ),
+        Command::MediaClear => subsystems::media::clear(&app),
+        Command::CacheStats => subsystems::cache::stats(&app),
+        Command::CacheClear => subsystems::cache::clear(&app),
     }
 }

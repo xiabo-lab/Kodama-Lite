@@ -81,6 +81,28 @@ export function createMockTransport(): Transport {
           // No cookie jar to read in a plain browser tab.
           setTimeout(() => emit({ type: "auth:state", signedIn: false }), 60);
           break;
+        case "media:update":
+        case "media:clear":
+          // No D-Bus in a browser tab, and nothing to fake: MPRIS is
+          // outbound-only until a real client presses a button.
+          break;
+        case "cache:clear":
+        case "cache:stats":
+          // The disk cache belongs to the Rust stream server, which isn't
+          // running here. Report an empty one rather than inventing a
+          // size — a fabricated "1.2 GB cached" in dev would be a lie the
+          // Storage screen presents as fact.
+          setTimeout(
+            () =>
+              emit({
+                type: "cache:stats",
+                count: 0,
+                bytes: 0,
+                dir: "(no data plane — browser mock)",
+              }),
+            80,
+          );
+          break;
         case "auth:signIn":
           // Deliberately NOT faked. Signing in means reading HttpOnly
           // cookies out of a real webview's cookie store (see

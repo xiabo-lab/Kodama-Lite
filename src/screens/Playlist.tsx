@@ -59,6 +59,8 @@ export function Playlist({ id }: { id: string }) {
         metadata={metadataParts}
         description={header.description}
         thumbnails={header.thumbnails}
+        kind="playlist"
+        id={id}
         onPlay={() => {
           if (tracks.length === 0) return;
           usePlaybackStore.getState().playQueue(tracks.map(shelfItemToTrack), 0);
