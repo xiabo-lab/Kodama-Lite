@@ -61,6 +61,11 @@ export default function App() {
     // a cold boot. `authStore` refetches Home when the answer comes back
     // signed-in, which is what makes the feed personalized.
     dispatch({ type: "auth:check" });
+    // Same reason as the two above: the data plane's boot-time `ytdlp:state`
+    // is emitted from the setup hook, before this webview could possibly be
+    // listening. Without asking again here, `ytdlpPhase` never leaves its
+    // initial value and resume-on-startup waits forever.
+    dispatch({ type: "ytdlp:check" });
     dispatchContent({ type: "home:load" });
     return () => {
       stopBus();

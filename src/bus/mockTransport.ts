@@ -76,6 +76,9 @@ export function createMockTransport(): Transport {
         case "stream:prefetch":
           // Silent, fire-and-forget — matches the real subsystem.
           break;
+        case "ytdlp:check":
+          setTimeout(() => emit({ type: "ytdlp:state", phase: "ready" }), 60);
+          break;
         case "auth:check":
         case "auth:signOut":
           // No cookie jar to read in a plain browser tab.

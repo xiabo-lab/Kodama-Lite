@@ -103,6 +103,27 @@ pub fn resolve(app: &AppHandle, video_id: String) {
     });
 }
 
+/// `ytdlp:check` — re-report the managed binary's phase.
+///
+/// `start` already emits `ytdlp:state`, but it runs from the setup hook,
+/// before the webview exists and long before it has subscribed to the
+/// event channel: on any launch where the binary is already present the
+/// "ready" emit lands in the void and the UI's `ytdlpPhase` stays
+/// "downloading" for the rest of the session. Nothing depended on that
+/// until resume-on-startup gated itself on it, at which point auto-play
+/// silently never fired.
+///
+/// `ensure` is the right thing to call again rather than a cached flag:
+/// it's idempotent, serialised behind its own mutex, and its self-update
+/// is stamp-guarded to 72h — so on the common path this costs one
+/// file-exists check and re-emits the phase the UI missed.
+pub fn check_ytdlp(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        ytdlp::ensure(app).await;
+    });
+}
+
 /// `stream:prefetch` — warm the disk cache for a track without playing
 /// it. Silent either way: a background prefetch has nothing to report to
 /// the UI, matching its fire-and-forget nature.

@@ -33,6 +33,10 @@ pub enum Command {
         #[serde(rename = "videoId")]
         video_id: String,
     },
+    /// Re-report the managed yt-dlp binary's phase — see the TS mirror for
+    /// why the boot-time emit alone is not enough.
+    #[serde(rename = "ytdlp:check")]
+    YtdlpCheck,
     /// Re-read the webview's cookie jar and report the current session.
     #[serde(rename = "auth:check")]
     AuthCheck,

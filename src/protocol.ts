@@ -23,6 +23,12 @@ export type Command =
   | { type: "stream:resolve"; videoId: string }
   /** Warm the disk cache for a track without playing it. */
   | { type: "stream:prefetch"; videoId: string }
+  /** Re-report the managed yt-dlp binary's phase. The data plane emits
+   *  `ytdlp:state` once from its setup hook, which runs before the webview
+   *  exists — so without asking again on mount the UI's `ytdlpPhase` stays
+   *  at its initial value for the whole session. Fired once on boot,
+   *  alongside `connectivity:check` and `auth:check`. */
+  | { type: "ytdlp:check" }
   /** Re-read the webview's cookie jar and report whether a signed-in
    *  YouTube Music session is already there (fired once on boot). */
   | { type: "auth:check" }
