@@ -89,15 +89,9 @@ function fetchFor(source: LyricsSource, p: LyricsQueryParams): Promise<Lyrics | 
  * *timed* lyrics wins; only if none have timed lyrics does the first
  * source with *plain* lyrics win. A source that errors or has nothing
  * simply falls through — never blocks or fails the others.
- *
- * All seven fetches run either way, so the network subsystem hands the
- * whole map to the view plane (`lyrics:loaded`) and lets the source picker
- * override the auto-pick locally, with no refetch. `pickBest` below is that
- * rule on its own, so the picker's "Auto" entry resolves through exactly
- * the same code path this does.
  */
 export async function fetchBestLyrics(params: LyricsQueryParams): Promise<Lyrics | null> {
-  return pickBest(await fetchAllLyrics(params));
+  return pickBest(await fetchLyricsTiered(params));
 }
 
 /**
@@ -117,16 +111,69 @@ export function pickBest(
   return null;
 }
 
-/** Fire all 7 sources in parallel; returns every source's result (or
- *  `null` for "nothing found" / a failed fetch), keyed by source. */
-export async function fetchAllLyrics(
+/**
+ * Search order, in tiers. Everything in a tier runs in parallel; tiers run
+ * one after another and stop as soon as something returns *timed* lyrics.
+ *
+ * Why not all seven at once, which is what this used to do: seven
+ * simultaneous HTTPS requests — several to servers on the other side of
+ * the world — plus seven JSON/LRC parses is enough to make a Pi 5 visibly
+ * stutter, and six of those results were thrown away the moment YouTube
+ * Music answered. In the common case this now makes exactly one request.
+ *
+ * YouTube Music leads alone because it needs no matching step: its lyrics
+ * are addressed by the exact videoId being played, so it cannot return a
+ * different song. Everything after it has to search and then guess, which
+ * is why they're paired — two tries at a time is a reasonable trade
+ * between latency and the odds of a hit.
+ */
+export const SEARCH_TIERS: LyricsSource[][] = [
+  ["ytmusic"],
+  ["kugou", "lrclib"],
+  ["musixmatch", "netease"],
+  ["genius", "qq"],
+];
+
+/** Did this map already answer the question, i.e. hold timed lyrics? */
+function hasTimed(results: Partial<Record<LyricsSource, Lyrics | null>>): boolean {
+  return Object.values(results).some((l) => l?.kind === "timed");
+}
+
+/**
+ * Walk `SEARCH_TIERS` until something returns timed lyrics.
+ *
+ * Returns a PARTIAL map: sources in tiers that were never reached are
+ * absent, which is deliberately distinct from present-and-`null` ("we
+ * asked, it had nothing"). The picker relies on that difference — an
+ * unsearched source is not the same as one known to be empty, and is
+ * fetched on demand if the user taps it.
+ *
+ * Plain lyrics do NOT stop the walk: YouTube Music very often has an
+ * unsynced transcript, and stopping there would mean never finding the
+ * synced version the karaoke stage exists for. They're kept, so if no tier
+ * produces timed lyrics `pickBest` still falls back to them.
+ */
+export async function fetchLyricsTiered(
   params: LyricsQueryParams,
-): Promise<Record<LyricsSource, Lyrics | null>> {
-  const settled = await Promise.allSettled(SOURCE_ORDER.map((s) => fetchFor(s, params)));
-  const out = {} as Record<LyricsSource, Lyrics | null>;
-  SOURCE_ORDER.forEach((s, i) => {
-    const r = settled[i];
-    out[s] = r.status === "fulfilled" ? r.value : null;
-  });
+): Promise<Partial<Record<LyricsSource, Lyrics | null>>> {
+  const out: Partial<Record<LyricsSource, Lyrics | null>> = {};
+
+  for (const tier of SEARCH_TIERS) {
+    const settled = await Promise.allSettled(tier.map((s) => fetchFor(s, params)));
+    tier.forEach((source, i) => {
+      const r = settled[i];
+      out[source] = r.status === "fulfilled" ? r.value : null;
+    });
+    if (hasTimed(out)) break;
+  }
+
   return out;
+}
+
+/** Fetch ONE source, for the picker's on-demand lookups. */
+export function fetchOneLyricsSource(
+  source: LyricsSource,
+  params: LyricsQueryParams,
+): Promise<Lyrics | null> {
+  return fetchFor(source, params).catch(() => null);
 }

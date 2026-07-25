@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CheckIcon, MicVocalIcon } from "lucide-react";
-import { SOURCE_LABELS, SOURCE_ORDER } from "@/lib/lyrics/sources";
-import type { Lyrics } from "@/lib/lyrics/types";
+import { SEARCH_TIERS, SOURCE_LABELS } from "@/lib/lyrics/sources";
 import { useLyricsStore, type SourceChoice } from "@/store/lyricsStore";
-import type { FeedStatus } from "@/store/homeStore";
 import { cn } from "@/lib/utils";
 
 /**
@@ -13,10 +11,15 @@ import { cn } from "@/lib/utils";
  * for every track anyway (see `fetchAllLyrics`), so the map is already in
  * the store and a switch is a `set()`, not a refetch.
  *
- * Each row says what that provider actually has for *this* track — synced,
- * plain, or nothing — which is the information that makes the choice
- * meaningful. Rows with nothing are disabled rather than hidden, so the
- * list doesn't reshuffle underneath a finger between tracks.
+ * A source that HAS lyrics for this track is shown in the brand red;
+ * everything else is plain. That replaced a "Synced"/"Unavailable" column
+ * which doubled the width of every row and said, for most rows, only that
+ * nothing had happened yet.
+ *
+ * Nothing is disabled any more either. Since the search runs in tiers
+ * (see `SEARCH_TIERS`), most sources are never queried — "not asked" is
+ * not "unavailable", and greying those out would be a lie. Tapping one
+ * fetches it on demand.
  *
  * Anchored panel with the same Escape/click-outside handling as the queue
  * panel; still no `@radix-ui/*` in this project.
@@ -24,16 +27,31 @@ import { cn } from "@/lib/utils";
 export function LyricsSourceButton({
   className,
   align = "right",
+  placement = "anchor",
+  onOpenChange,
   disabled = false,
 }: {
   className?: string;
-  /** Which edge of the button the panel hangs from. */
+  /** Which edge of the button the panel hangs from, when anchored. */
   align?: "left" | "right";
+  /** `anchor` hangs the panel off the button (the player bar).
+   *  `screen-right` pins it to the right edge of the screen instead —
+   *  used on the karaoke stage, where a panel anchored to a button two
+   *  thirds across lands squarely on top of the lyrics it is meant to
+   *  be read alongside. */
+  placement?: "anchor" | "screen-right";
+  /** Told whenever the panel opens or closes, so a caller can make room
+   *  for it. The karaoke stage uses this to narrow the lyrics column. */
+  onOpenChange?: (open: boolean) => void;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const choice = useLyricsStore((s) => s.choice);
+
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
 
   useEffect(() => {
     if (!open) return;
@@ -72,7 +90,11 @@ export function LyricsSourceButton({
         <MicVocalIcon />
       </button>
       {open && (
-        <SourceList align={align} onPick={() => setOpen(false)} />
+        <SourceList
+          align={align}
+          placement={placement}
+          onPick={() => setOpen(false)}
+        />
       )}
     </div>
   );
@@ -80,9 +102,11 @@ export function LyricsSourceButton({
 
 function SourceList({
   align,
+  placement,
   onPick,
 }: {
   align: "left" | "right";
+  placement: "anchor" | "screen-right";
   onPick: () => void;
 }) {
   const sources = useLyricsStore((s) => s.sources);
@@ -104,8 +128,14 @@ function SourceList({
       // a fingertip. Eight entries in two columns fit without scrolling at
       // all — the `max-h` below is now a safety net rather than the plan.
       className={cn(
-        "absolute bottom-full z-50 mb-3 flex max-h-[calc(100vh-8rem)] w-[600px] max-w-[calc(100vw-2rem)] flex-col gap-0.5 overflow-y-auto rounded-xl border border-hairline bg-surface-active p-2 shadow-lg backdrop-blur",
-        align === "right" ? "right-0" : "left-0",
+        "z-[55] flex w-[600px] max-w-[calc(100vw-2rem)] flex-col gap-0.5 overflow-y-auto rounded-xl border border-hairline bg-surface-active p-2 shadow-lg backdrop-blur",
+        placement === "screen-right"
+          ? // Pinned to the screen, clear of the karaoke control row.
+            "fixed bottom-28 right-6 max-h-[calc(100vh-9rem)]"
+          : cn(
+              "absolute bottom-full mb-3 max-h-[calc(100vh-8rem)]",
+              align === "right" ? "right-0" : "left-0",
+            ),
       )}
     >
       {/* Padding and row height are tuned so all eight entries fit inside
@@ -118,58 +148,68 @@ function SourceList({
       {/* Auto spans both columns: it isn't one provider among eight, it's
           the rule that picks between them. */}
       <SourceRow
-        label="Auto"
-        detail={status === "loading" ? "Searching…" : "Best available"}
+        label={status === "loading" ? "Auto — searching…" : "Auto"}
+        available
         selected={choice === "auto"}
         onSelect={() => select("auto")}
       />
       <div className="my-0.5 h-px bg-hairline" aria-hidden="true" />
+      {/* Laid out one row per SEARCH TIER, not simply flowed two-up.
+          YouTube Music is a tier of its own so it spans the full width;
+          Kugou and LRCLIB share the next row because they are searched
+          together, and so on. The rows then say something true about the
+          order things are tried in, instead of being an arbitrary wrap. */}
       <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
-        {SOURCE_ORDER.map((source) => (
-          <SourceRow
-            key={source}
-            label={SOURCE_LABELS[source]}
-            detail={detailFor(sources[source], status)}
-            selected={choice === source}
-            disabled={!sources[source]}
-            onSelect={() => select(source)}
-          />
-        ))}
+        {SEARCH_TIERS.flatMap((tier) =>
+          tier.map((source) => (
+            <SourceRow
+              key={source}
+              label={SOURCE_LABELS[source]}
+              available={!!sources[source]}
+              selected={choice === source}
+              onSelect={() => select(source)}
+              className={tier.length === 1 ? "col-span-2" : undefined}
+            />
+          )),
+        )}
       </div>
     </div>
   );
 }
 
-function detailFor(lyrics: Lyrics | null, status: FeedStatus): string {
-  if (lyrics?.kind === "timed") return "Synced";
-  if (lyrics?.kind === "plain") return "Plain text";
-  return status === "loading" ? "Searching…" : "Unavailable";
-}
-
 function SourceRow({
   label,
-  detail,
+  available,
   selected,
-  disabled = false,
   onSelect,
+  className,
 }: {
   label: string;
-  detail: string;
+  /** Has lyrics for the current track — shown in brand red. */
+  available: boolean;
   selected: boolean;
-  disabled?: boolean;
   onSelect: () => void;
+  className?: string;
 }) {
   return (
     <button
       type="button"
       role="menuitemradio"
       aria-checked={selected}
-      disabled={disabled}
       onClick={onSelect}
-      className="flex min-h-11 items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-white/10 disabled:pointer-events-none disabled:opacity-40"
+      className={cn(
+        "flex min-h-11 items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-white/10",
+        className,
+      )}
     >
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      <span className="shrink-0 text-xs text-muted-foreground">{detail}</span>
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate",
+          available ? "font-medium text-brand" : "text-foreground",
+        )}
+      >
+        {label}
+      </span>
       {/* Reserve the tick's width on every row so selecting one doesn't
           reflow the column it's in. */}
       <CheckIcon

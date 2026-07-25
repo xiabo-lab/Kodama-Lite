@@ -22,7 +22,14 @@ function formatDuration(seconds?: number): string {
  * doesn't have `@radix-ui/*` as a dependency yet, and one more primitive
  * wasn't worth pulling in against tonight's deadline.
  */
-export function QueuePanel() {
+export function QueuePanel({
+  placement = "anchor",
+}: {
+  /** `anchor` centres the panel over its button (the player bar).
+   *  `screen-right` pins it to the right edge — on the karaoke stage an
+   *  anchored panel sits on top of the lyrics. */
+  placement?: "anchor" | "screen-right";
+} = {}) {
   const open = useQueuePanelStore((s) => s.open);
   const setOpen = useQueuePanelStore((s) => s.setOpen);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -48,7 +55,12 @@ export function QueuePanel() {
   return (
     <div
       ref={panelRef}
-      className="absolute bottom-full left-1/2 z-40 mb-3 flex h-[min(28rem,70vh)] w-[28rem] max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-hairline bg-surface-active shadow-lg backdrop-blur"
+      className={cn(
+        "z-[55] flex h-[min(28rem,70vh)] w-[28rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-hairline bg-surface-active shadow-lg backdrop-blur",
+        placement === "screen-right"
+          ? "fixed bottom-28 right-6"
+          : "absolute bottom-full left-1/2 mb-3 -translate-x-1/2",
+      )}
     >
       <header className="flex shrink-0 items-center justify-between gap-2 border-b border-hairline px-3 py-2">
         <span className="text-sm font-semibold">Queue</span>

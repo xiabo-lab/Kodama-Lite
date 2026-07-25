@@ -13,7 +13,8 @@ const LYRICS_CACHE_KEY = "kl:lyrics-cache";
  *  localStorage budget and covers far more than a car's rotation. */
 const LYRICS_CACHE_MAX = 300;
 
-type CachedLyrics = Record<string, Record<LyricsSource, Lyrics | null>>;
+type SourceMap = Partial<Record<LyricsSource, Lyrics | null>>;
+type CachedLyrics = Record<string, SourceMap>;
 
 /**
  * Persisted per-track lyrics, keyed by videoId. Replaying a track costs
@@ -46,16 +47,11 @@ function cache(): CachedLyrics {
   return lyricsCache;
 }
 
-function readCached(
-  videoId: string,
-): Record<LyricsSource, Lyrics | null> | undefined {
+function readCached(videoId: string): SourceMap | undefined {
   return cache()[videoId];
 }
 
-function writeCached(
-  videoId: string,
-  sources: Record<LyricsSource, Lyrics | null>,
-): void {
+function writeCached(videoId: string, sources: SourceMap): void {
   // Nothing found by any source isn't worth a cache slot — and caching it
   // would mean a track whose lyrics appear later never gets rechecked.
   if (!Object.values(sources).some(Boolean)) return;
@@ -96,10 +92,9 @@ export function lyricsCacheStats(): { count: number; bytes: number } {
   return { count, bytes };
 }
 
-function emptySources(): Record<LyricsSource, Lyrics | null> {
-  const out = {} as Record<LyricsSource, Lyrics | null>;
-  for (const s of SOURCE_ORDER) out[s] = null;
-  return out;
+/** No source searched yet — distinct from a searched-and-empty `null`. */
+function emptySources(): SourceMap {
+  return {};
 }
 
 /** The picked source is a standing preference, not a per-track one — you
@@ -131,10 +126,7 @@ function saveChoice(choice: SourceChoice): void {
  * nothing unless it's LRCLIB", and the picker still marks which sources
  * are unavailable so the fallback isn't a mystery.
  */
-function resolve(
-  sources: Record<LyricsSource, Lyrics | null>,
-  choice: SourceChoice,
-): Lyrics | null {
+function resolve(sources: SourceMap, choice: SourceChoice): Lyrics | null {
   if (choice !== "auto") {
     const pinned = sources[choice];
     if (pinned) return pinned;
@@ -142,13 +134,23 @@ function resolve(
   return pickBest(sources);
 }
 
+type LoadParams = {
+  videoId: string;
+  title: string;
+  artist?: string;
+  album?: string;
+  duration?: number;
+};
+
 interface LyricsState {
   videoId?: string;
+  /** Kept so the picker can re-query a single source later. */
+  params?: LoadParams;
   status: FeedStatus;
   /** Every provider's result for the current track — `null` where that
    *  provider had nothing or failed. Drives the picker's availability
    *  markers as well as the switch itself. */
-  sources: Record<LyricsSource, Lyrics | null>;
+  sources: SourceMap;
   choice: SourceChoice;
   /** What the views render: `resolve(sources, choice)`. Derived, but kept
    *  in state so `LyricsBody` stays a one-line subscription. */
@@ -166,6 +168,9 @@ interface LyricsState {
   /** Switch providers. Local and instant — every source was already
    *  fetched for this track, so nothing goes back over the network. */
   setChoice: (choice: SourceChoice) => void;
+  /** Fetch one source the tiered search never reached, because the user
+   *  asked for it by name in the picker. */
+  fetchSource: (source: LyricsSource) => void;
   applyEvents: (events: ContentEvent[]) => void;
 }
 
@@ -191,6 +196,7 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
     if (cached) {
       set({
         videoId: params.videoId,
+        params,
         status: "ready",
         sources: cached,
         lyrics: resolve(cached, get().choice),
@@ -201,6 +207,7 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
 
     set({
       videoId: params.videoId,
+      params,
       status: "loading",
       sources: emptySources(),
       lyrics: null,
@@ -212,6 +219,18 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
   setChoice: (choice) => {
     saveChoice(choice);
     set({ choice, lyrics: resolve(get().sources, choice) });
+    // Picking a source the tiered search skipped: go and get it. Nothing
+    // to do when it's already in the map, including as a known `null`.
+    if (choice !== "auto" && get().sources[choice] === undefined) {
+      get().fetchSource(choice);
+    }
+  },
+
+  fetchSource: (source) => {
+    const { videoId, params } = get();
+    if (!videoId || !params) return;
+    set({ sources: { ...get().sources, [source]: null }, status: "loading" });
+    dispatchContent({ type: "lyrics:source", source, ...params });
   },
 
   applyEvents: (events) => {
@@ -234,6 +253,18 @@ export const useLyricsStore = create<LyricsState>((set, get) => ({
             });
           }
           break;
+        case "lyrics:source-loaded": {
+          if (get().videoId !== e.videoId) break;
+          const sources = { ...get().sources, [e.source]: e.lyrics };
+          writeCached(e.videoId, sources);
+          set({
+            status: "ready",
+            sources,
+            lyrics: resolve(sources, get().choice),
+            error: undefined,
+          });
+          break;
+        }
         case "lyrics:error":
           if (get().videoId === e.videoId) {
             set({

@@ -14,7 +14,11 @@ import { fetchSearch } from "@/lib/innertube/search";
 import { fetchPlaylistFirstPage, fetchPlaylistContinuation } from "@/lib/innertube/playlist";
 import { fetchAlbum } from "@/lib/innertube/album";
 import { fetchArtist } from "@/lib/innertube/artist";
-import { fetchAllLyrics, type LyricsSource } from "@/lib/lyrics/sources";
+import {
+  fetchLyricsTiered,
+  fetchOneLyricsSource,
+  type LyricsSource,
+} from "@/lib/lyrics/sources";
 import {
   fetchLibraryAlbums,
   fetchLibraryArtists,
@@ -64,6 +68,15 @@ export type ContentCommand =
   | { type: "library:load"; tab: LibraryTab }
   /** Fetch tracks similar to `videoId` to extend the queue past its end. */
   | { type: "radio:load"; videoId: string }
+  | {
+      type: "lyrics:source";
+      source: LyricsSource;
+      videoId: string;
+      title: string;
+      artist?: string;
+      album?: string;
+      duration?: number;
+    }
   | {
       type: "lyrics:load";
       videoId: string;
@@ -122,7 +135,16 @@ export type ContentEvent =
   | {
       type: "lyrics:loaded";
       videoId: string;
-      sources: Record<LyricsSource, Lyrics | null>;
+      /** PARTIAL: only the tiers that were actually searched. A missing
+       *  key means "not asked"; a `null` value means "asked, nothing". */
+      sources: Partial<Record<LyricsSource, Lyrics | null>>;
+    }
+  /** One source, fetched because the user picked it in the picker. */
+  | {
+      type: "lyrics:source-loaded";
+      videoId: string;
+      source: LyricsSource;
+      lyrics: Lyrics | null;
     }
   | { type: "lyrics:error"; videoId: string; message: string };
 
@@ -313,10 +335,22 @@ async function handle(command: ContentCommand): Promise<void> {
       return;
     }
 
+    case "lyrics:source": {
+      const { source, ...params } = command;
+      const lyrics = await fetchOneLyricsSource(source, params);
+      publish({
+        type: "lyrics:source-loaded",
+        videoId: params.videoId,
+        source,
+        lyrics,
+      });
+      return;
+    }
+
     case "lyrics:load": {
       publish({ type: "lyrics:loading", videoId: command.videoId });
       try {
-        const sources = await fetchAllLyrics(command);
+        const sources = await fetchLyricsTiered(command);
         publish({ type: "lyrics:loaded", videoId: command.videoId, sources });
       } catch (e) {
         publish({ type: "lyrics:error", videoId: command.videoId, message: errMessage(e) });

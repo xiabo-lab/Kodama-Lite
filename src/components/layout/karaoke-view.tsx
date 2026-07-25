@@ -18,6 +18,7 @@ import { useLikedSongsStore } from "@/store/likedSongsStore";
 import { LyricsBody, STAGE_LEADING } from "@/components/layout/lyrics-view";
 import { LyricsSourceButton } from "@/components/layout/lyrics-source-picker";
 import { QueueButton, QueuePanel } from "@/components/layout/queue-panel";
+import { useQueuePanelStore } from "@/store/queuePanelStore";
 import { cn } from "@/lib/utils";
 
 // Plain `vite dev` in a browser has no Tauri backend; `getCurrentWindow()`
@@ -145,6 +146,15 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
   // here — see its comment. Fetching from this component meant a track
   // only got lyrics if you happened to open the stage for it.
 
+  // Either side panel makes the lyrics yield the right-hand third of the
+  // stage. Pinning the panels to the screen edge stopped them landing in
+  // the middle of the text, but the lines still ran under them — measured
+  // 208px of overlap on the longest line. Narrowing the column re-centres
+  // the text in what's left, so nothing is ever hidden behind a panel.
+  const queueOpen = useQueuePanelStore((s) => s.open);
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const panelOpen = queueOpen || sourceOpen;
+
   const [scrub, setScrub] = useState<number | null>(null);
   const [chrome, setChrome] = useState(false);
   const hideRef = useRef<number | null>(null);
@@ -238,7 +248,13 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
       </button>
 
       <div
-        className="flex min-h-0 flex-1 items-center justify-center overflow-hidden"
+        className={cn(
+          "flex min-h-0 flex-1 items-center justify-center overflow-hidden",
+          // Not animated: a CSS transition only advances while frames are
+          // produced, and a stalled one would leave the column stuck at
+          // the wrong width with the panel already closed.
+          panelOpen && "pr-[640px]",
+        )}
         style={{ "--lyric-font": LYRIC_FONT, "--lyric-gap": LYRIC_GAP } as React.CSSProperties}
       >
         <div
@@ -307,11 +323,14 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="absolute inset-y-0 right-6 flex items-center gap-[clamp(0.25rem,1vw,0.75rem)]">
-          <LyricsSourceButton className={SECONDARY_BTN} disabled={!hasTrack} />
-          <div className="relative">
-            <QueuePanel />
-            <QueueButton className={SECONDARY_BTN} />
-          </div>
+          <LyricsSourceButton
+            className={SECONDARY_BTN}
+            placement="screen-right"
+            onOpenChange={setSourceOpen}
+            disabled={!hasTrack}
+          />
+          <QueuePanel placement="screen-right" />
+          <QueueButton className={SECONDARY_BTN} />
           <KaraokeVolume />
         </div>
       </div>
