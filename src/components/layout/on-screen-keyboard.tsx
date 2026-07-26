@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import {
   ArrowBigUpIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   CornerDownLeftIcon,
   DeleteIcon,
   EraserIcon,
@@ -53,6 +55,13 @@ const MOD_KEY =
   "flex h-full w-36 shrink-0 items-center justify-center gap-2 rounded-lg bg-white/10 text-lg font-medium text-foreground transition-colors active:bg-white/25 hover:bg-white/15";
 const WIDE =
   "flex h-full items-center justify-center gap-2 rounded-lg bg-white/10 px-4 text-lg font-medium text-foreground transition-colors active:bg-white/25 hover:bg-white/15";
+const PAGER_BTN =
+  "flex size-12 shrink-0 items-center justify-center rounded-lg bg-white/10 text-foreground transition-colors hover:bg-white/20 active:bg-white/25 disabled:opacity-25";
+
+/** Candidates per page in the Chinese bar. Nine fits the 1920px panel at
+ *  this key size without crowding the pager, and matches the 1-9 row a
+ *  physical IME numbers its candidates with. */
+const CANDIDATES_PER_PAGE = 9;
 
 export function OnScreenKeyboard({
   value,
@@ -98,14 +107,32 @@ export function OnScreenKeyboard({
   const candidates: Candidate[] =
     chinese && dict && composing ? candidatesFor(composing, dict) : [];
 
+  // Candidates are paged rather than scrolled. The bar was
+  // `overflow-x-auto`, which on the Pi is unusable: WebKitGTK dispatches
+  // no touch events for the webview (the same reason `useDragScroll`
+  // exists), so a horizontally scrolling strip has no way to be scrolled
+  // by finger at all — everything past the ninth candidate was
+  // unreachable even once the dictionary held it.
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(candidates.length / CANDIDATES_PER_PAGE));
+  // Every edit to the buffer resets to page 0 (see `typeLetter`/`backspace`)
+  // because it produces a different candidate list. This clamp is the
+  // safety net for the paths that don't, so a stale page index can never
+  // render an empty bar.
+  const shownPage = Math.min(page, pageCount - 1);
+  const pageStart = shownPage * CANDIDATES_PER_PAGE;
+  const pageCandidates = candidates.slice(pageStart, pageStart + CANDIDATES_PER_PAGE);
+
   const commit = (c: Candidate) => {
     onChange((prev) => prev + c.text);
     setComposing((prev) => prev.slice(c.consumed));
+    setPage(0);
   };
 
   const typeLetter = (ch: string) => {
     if (chinese && /^[a-z]$/i.test(ch)) {
       setComposing((prev) => prev + ch.toLowerCase());
+      setPage(0);
       return;
     }
     onChange((prev) => prev + ch);
@@ -116,6 +143,7 @@ export function OnScreenKeyboard({
     // should not eat the text you already committed.
     if (composing) {
       setComposing((prev) => prev.slice(0, -1));
+      setPage(0);
       return;
     }
     onChange((prev) => prev.slice(0, -1));
@@ -123,14 +151,16 @@ export function OnScreenKeyboard({
 
   const clearAll = () => {
     setComposing("");
+    setPage(0);
     onChange(() => "");
   };
 
   const submit = () => {
-    // A pending buffer means the user is mid-word; take the best candidate
-    // rather than throwing away what they typed.
-    if (composing && candidates.length) {
-      commit(candidates[0]);
+    // A pending buffer means the user is mid-word; take the first
+    // candidate on the page they're looking at rather than throwing away
+    // what they typed.
+    if (composing && pageCandidates.length) {
+      commit(pageCandidates[0]);
       return;
     }
     setComposing("");
@@ -149,11 +179,22 @@ export function OnScreenKeyboard({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const converting = composing && pageCandidates.length > 0;
       if (e.key === "Escape") onClose();
       else if (e.key === "Enter") submit();
       else if (e.key === "Backspace") backspace();
-      else if (e.key === " " && composing && candidates.length) {
-        commit(candidates[0]);
+      else if (e.key === " " && converting) commit(pageCandidates[0]);
+      // Mid-conversion the number row picks a candidate and the arrows
+      // page, the way every desktop IME behaves. Outside conversion they
+      // stay ordinary keys, so typing a digit into a query still works.
+      else if (converting && /^[1-9]$/.test(e.key)) {
+        const pick = pageCandidates[Number(e.key) - 1];
+        if (!pick) return;
+        commit(pick);
+      } else if (converting && e.key === "ArrowRight") {
+        setPage((p) => Math.min(pageCount - 1, p + 1));
+      } else if (converting && e.key === "ArrowLeft") {
+        setPage((p) => Math.max(0, p - 1));
       } else if (e.key.length === 1) typeLetter(e.key);
       else return;
       e.preventDefault();
@@ -218,7 +259,7 @@ export function OnScreenKeyboard({
           below don't jump up and down as candidates come and go — a row
           that moves under a finger is worse than a row that's blank. */}
       {chinese ? (
-        <div className="flex h-14 shrink-0 items-center gap-2 overflow-x-auto rounded-lg bg-white/5 px-2">
+        <div className="flex h-14 shrink-0 items-center gap-2 rounded-lg bg-white/5 px-2">
           {dictError ? (
             <span className="text-sm text-brand">
               Couldn't load the Pinyin dictionary.
@@ -228,16 +269,48 @@ export function OnScreenKeyboard({
               Loading Pinyin…
             </span>
           ) : candidates.length ? (
-            candidates.map((c, i) => (
-              <button
-                key={`${c.text}-${i}`}
-                type="button"
-                onClick={() => commit(c)}
-                className="flex h-12 min-w-12 shrink-0 items-center justify-center rounded-lg bg-white/10 px-3 text-2xl transition-colors hover:bg-white/20 active:bg-white/25"
-              >
-                {c.text}
-              </button>
-            ))
+            <>
+              {pageCandidates.map((c, i) => (
+                <button
+                  key={`${c.text}-${pageStart + i}`}
+                  type="button"
+                  onClick={() => commit(c)}
+                  className="flex h-12 min-w-12 shrink-0 items-center justify-center rounded-lg bg-white/10 px-3 text-2xl transition-colors hover:bg-white/20 active:bg-white/25"
+                >
+                  {c.text}
+                </button>
+              ))}
+              {/* Pager pinned right, and mounted whenever Chinese is on
+                  rather than only when there's a second page — a control
+                  that appears and disappears under a finger shifts the
+                  candidates sideways mid-tap. `ml-auto` keeps it at the
+                  edge no matter how few candidates the page holds. */}
+              <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">
+                <span className="px-1 text-sm tabular-nums text-muted-foreground">
+                  {shownPage + 1}/{pageCount}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Previous candidates"
+                  disabled={shownPage === 0}
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  className={PAGER_BTN}
+                >
+                  <ChevronLeftIcon className="size-6" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="More candidates"
+                  disabled={shownPage >= pageCount - 1}
+                  onClick={() =>
+                    setPage((p) => Math.min(pageCount - 1, p + 1))
+                  }
+                  className={PAGER_BTN}
+                >
+                  <ChevronRightIcon className="size-6" />
+                </button>
+              </div>
+            </>
           ) : (
             <span className="text-sm text-muted-foreground">
               {composing ? "No match" : "Type pinyin, e.g. beijing"}
@@ -311,8 +384,8 @@ export function OnScreenKeyboard({
             type="button"
             aria-label="Space"
             onClick={() =>
-              composing && candidates.length
-                ? commit(candidates[0])
+              composing && pageCandidates.length
+                ? commit(pageCandidates[0])
                 : onChange((prev) => prev + " ")
             }
             className={cn(KEY, "flex-1")}

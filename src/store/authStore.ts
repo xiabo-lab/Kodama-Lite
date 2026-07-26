@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { dispatch } from "@/bus/bus";
 import { dispatchContent } from "@/lib/network";
 import { useLibraryStore } from "@/store/libraryStore";
+import { useLikedSongsStore } from "@/store/likedSongsStore";
 import type { AppEvent } from "@/protocol";
 import { resetAuthCache, setSession } from "@/lib/innertube/shared";
 import { fetchAccount, type Account } from "@/lib/innertube/account";
@@ -37,6 +38,41 @@ export interface AuthState {
  *  after a later sign-out and resurrecting the old name/avatar. */
 let sessionEpoch = 0;
 
+/**
+ * Backoff schedule for the account-name fetch. A single attempt was the
+ * bug: `account/account_menu` is the first authenticated request of the
+ * session, so on the Pi it routinely goes out before the phone hotspot has
+ * finished associating, returns nothing, and — because `fetchAccount`
+ * swallows failures by design — leaves the sidebar reading "Signed in"
+ * for the rest of the run with no way to ask again.
+ *
+ * That fallback also turned out to be a useful symptom: the same dead
+ * window costs the personalized Home feed and the liked-songs sync. Those
+ * have their own retries now, but the name is the visible one, so it's
+ * worth getting right.
+ */
+const ACCOUNT_RETRY_MS = [1_000, 3_000, 8_000, 20_000, 60_000];
+
+/**
+ * Fetch the display name/avatar, retrying while the answer is empty.
+ * Stops on the first result that carries a name, when the schedule runs
+ * out, or as soon as the session it was started for is superseded.
+ */
+function loadAccount(epoch: number, attempt = 0): void {
+  void fetchAccount().then((account) => {
+    if (epoch !== sessionEpoch) return;
+    // A partial answer (avatar, no name) still beats the generic chip, so
+    // keep it — but keep asking, because the name is the point.
+    if (account) useAuthStore.setState({ account });
+    if (account?.name) return;
+    const delay = ACCOUNT_RETRY_MS[attempt];
+    if (delay === undefined) return;
+    window.setTimeout(() => {
+      if (epoch === sessionEpoch) loadAccount(epoch, attempt + 1);
+    }, delay);
+  });
+}
+
 export const useAuthStore = create<AuthState>((set) => ({
   status: "signed-out",
   account: null,
@@ -54,6 +90,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     sessionEpoch++;
     resetAuthCache();
     useLibraryStore.getState().reset();
+    useLikedSongsStore.getState().reset();
     set({ status: "signed-out", account: null, error: null });
     dispatch({ type: "auth:signOut" });
     dispatchContent({ type: "home:load" });
@@ -66,16 +103,23 @@ export const useAuthStore = create<AuthState>((set) => ({
         const wasSignedIn = useAuthStore.getState().status === "signed-in";
         // Library content is per-account and never persisted — drop it on
         // any session change so one account's playlists can't paint under
-        // another's name.
+        // another's name. Liked songs are the same: the heart state is
+        // whose account it is.
         useLibraryStore.getState().reset();
+        useLikedSongsStore.getState().reset();
         if (e.signedIn && e.cookie && e.sapisid) {
           setSession({ cookie: e.cookie, sapisid: e.sapisid });
-          set({ status: "signed-in", account: null, error: null });
+          // Keep a name already on screen across a redundant `auth:check`
+          // answer: blanking it to null here made the sidebar flicker back
+          // to "Signed in" every time the cookie jar was re-read.
+          const keep = wasSignedIn ? useAuthStore.getState().account : null;
+          set({ status: "signed-in", account: keep, error: null });
           // Cosmetic and non-blocking — the app is fully signed in the
           // moment the line above runs, whether or not this ever resolves.
-          void fetchAccount().then((account) => {
-            if (account && epoch === sessionEpoch) set({ account });
-          });
+          loadAccount(epoch);
+          // Seed the heart state. Must come after `setSession`: the store
+          // refuses to sync without a session, on purpose.
+          useLikedSongsStore.getState().sync();
           // Home is the one feed whose contents differ between anonymous
           // and signed-in. Boot fetches it anonymously (the cookie jar
           // read is async, so it can't have landed first) — refetch now

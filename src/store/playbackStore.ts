@@ -106,6 +106,47 @@ function saveQueueCache(queue: Track[], index: number): void {
   }
 }
 
+const VOLUME_CACHE_KEY = "kl:volume";
+
+/**
+ * Volume survives a restart, in its own key rather than the queue cache —
+ * it's a device preference, not part of "what was playing", and clearing
+ * the queue must not reset how loud the car is.
+ *
+ * It used to boot at a hardcoded 1, so every launch came back at full
+ * volume no matter what it was set to before. The user's workaround was to
+ * turn the *system* stream down (PipeWire remembers per-role volume, and
+ * WirePlumber keys it by `media.role=Music`), which left the in-app slider
+ * sitting at 100% while the output was at 45% — two attenuators, only one
+ * of them visible. Persisting this makes the slider the control that
+ * actually holds, so the system one can stay where it belongs.
+ */
+function loadVolume(): { volume: number; muted: boolean } {
+  try {
+    const raw = localStorage.getItem(VOLUME_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { volume?: number; muted?: boolean };
+      const v = Number(parsed.volume);
+      // A corrupt or out-of-range value must not be able to make the next
+      // launch silent OR deafening — fall back to full rather than trust it.
+      if (Number.isFinite(v) && v >= 0 && v <= 1) {
+        return { volume: v, muted: !!parsed.muted };
+      }
+    }
+  } catch {
+    /* corrupt — fall through to the default */
+  }
+  return { volume: 1, muted: false };
+}
+
+function saveVolume(volume: number, muted: boolean): void {
+  try {
+    localStorage.setItem(VOLUME_CACHE_KEY, JSON.stringify({ volume, muted }));
+  } catch {
+    /* quota / private mode — non-fatal, in-memory state still works */
+  }
+}
+
 /** Fire a `stream:resolve` for the now-current track. Never awaited — the
  *  URL arrives later as a `stream:ready` event. */
 function requestStream(videoId: string | undefined): void {
@@ -144,6 +185,7 @@ function loadTrackAt(
 
 export const usePlaybackStore = create<PlaybackState>((set, get) => {
   const cached = loadQueueCache();
+  const savedVolume = loadVolume();
   return {
     queue: cached.queue,
     index: cached.index,
@@ -153,8 +195,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
     status: "idle",
     position: 0,
     duration: cached.queue[cached.index]?.duration ?? 0,
-    volume: 1,
-    muted: false,
+    volume: savedVolume.volume,
+    muted: savedVolume.muted,
     shuffle: false,
     repeat: "off",
     ytdlpPhase: "downloading",
@@ -266,8 +308,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
 
     seek: (seconds) => set({ position: Math.max(0, seconds) }),
 
-    setVolume: (v) => set({ volume: Math.max(0, Math.min(1, v)), muted: false }),
-    toggleMute: () => set((s) => ({ muted: !s.muted })),
+    setVolume: (v) => {
+      const volume = Math.max(0, Math.min(1, v));
+      saveVolume(volume, false);
+      set({ volume, muted: false });
+    },
+    toggleMute: () =>
+      set((s) => {
+        const muted = !s.muted;
+        saveVolume(s.volume, muted);
+        return { muted };
+      }),
     setShuffle: (on) => set({ shuffle: on }),
     cycleRepeat: () =>
       set((s) => ({

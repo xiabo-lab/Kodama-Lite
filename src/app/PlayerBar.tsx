@@ -12,7 +12,7 @@ import {
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
 import { QueueButton, QueuePanel } from "@/components/layout/queue-panel";
-import { LyricsSourceButton } from "@/components/layout/lyrics-source-picker";
+import { LikeButton } from "@/components/shared/like-button";
 import { cn } from "@/lib/utils";
 
 /**
@@ -124,6 +124,18 @@ export function PlayerBar() {
             the window is narrow enough that there's no slack left to
             distribute. */}
         <div className="flex flex-1 items-center justify-between gap-4">
+          {/* Like sits outside the transport group, to the left of
+              Shuffle, because it acts on the track rather than on
+              playback. Swapped in for the lyrics-source picker, which the
+              karaoke stage still carries — that's where you are when a
+              lyric sheet is wrong, and it's one control too many out here.
+              One in, one out keeps the child count at eight, so
+              `justify-between` distributes exactly the same spacing as
+              before. */}
+          <LikeButton
+            videoId={track?.videoId}
+            className={cn(ICON_BTN, "disabled:opacity-40 [&_svg]:size-10")}
+          />
           <button
             className={cn(ICON_BTN, shuffle && "text-brand")}
             aria-label="Shuffle"
@@ -174,14 +186,6 @@ export function PlayerBar() {
               <RepeatIcon className="size-10" />
             )}
           </button>
-          {/* The mic is the lyrics-*source* picker, not a way into the
-              karaoke stage. That's the top-right corner button now (see
-              `TopBar`) — a corner is a far better touch target than a
-              40px icon wedged between Repeat and this one. */}
-          <LyricsSourceButton
-            className={cn(ICON_BTN, "[&_svg]:size-10")}
-            disabled={!hasTrack}
-          />
           <QueueButton
             className={cn(ICON_BTN, "flex items-center justify-center [&_svg]:size-10")}
           />

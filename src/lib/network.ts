@@ -177,14 +177,31 @@ function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** Sequence number for `home:load`, so a slower earlier request can't
+ *  land on top of a newer one. See the handler for why Home in
+ *  particular needs it. */
+let homeSeq = 0;
+
 async function handle(command: ContentCommand): Promise<void> {
   switch (command.type) {
     case "home:load": {
+      // Boot dispatches this twice: once anonymously from `App.tsx` (the
+      // cookie-jar read is async, so it cannot have landed yet) and again
+      // from `authStore` when `auth:state` comes back signed-in. Both
+      // parse fine, but only the second carries the personalized shelves
+      // — "Listen again", "Quick picks". Without this guard whichever
+      // request happened to finish last won, so an anonymous response
+      // that came back slowly would overwrite the personalized feed AND
+      // be written to the localStorage cache, which is why "Listen again"
+      // went missing on some launches and not others.
+      const seq = ++homeSeq;
       publish({ type: "home:loading" });
       try {
         const page = await fetchHomeFeedPage();
+        if (seq !== homeSeq) return;
         publish({ type: "home:loaded", shelves: page.shelves });
       } catch (e) {
+        if (seq !== homeSeq) return;
         publish({ type: "home:error", message: errMessage(e) });
       }
       return;

@@ -8,6 +8,10 @@ mod protocol;
 mod subsystems;
 mod ytdlp;
 
+/// Brings `get_webview_window` into scope for the single-instance
+/// callback — it's an extension-trait method on `AppHandle`.
+use tauri::Manager;
+
 /// Linux-only environment fixup that must run before GTK/WebKit is
 /// initialized — i.e. the very first statement of `run()`, before the
 /// builder exists.
@@ -36,6 +40,22 @@ fn init_env() {
 pub fn run() {
     init_env();
     tauri::Builder::default()
+        // MUST be the first plugin registered — it decides whether this
+        // process is the app or a duplicate that should hand over and
+        // quit, and that has to happen before anything else claims a
+        // resource. The callback runs in the ALREADY-RUNNING instance
+        // when a second launch is attempted; the second process exits on
+        // its own once this returns.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // Raise the window the user was trying to reach. Tapping the
+            // desktop icon while the service is running should look like
+            // switching to the app, not like nothing happened.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .setup(|app| {

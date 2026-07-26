@@ -1,6 +1,6 @@
 [package]
 name = "kodama-lite"
-version = "0.1.19"
+version = "0.1.20"
 description = "Kodama-Lite — a fluid, decoupled YouTube Music client for the Raspberry Pi 5"
 authors = ["xiabo-lab"]
 license = "GPL-3.0-only"
@@ -19,6 +19,14 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# One running copy, enforced. The Pi can start the app from two places —
+# the `kodama-lite` systemd user service and the desktop icon pcmanfm
+# draws from ~/Desktop — and nothing stopped both from running: the
+# stream server binds port 0, so a second instance gets its own port and
+# coexists silently. With resume-on-startup on, both then restored the
+# last queue and played it, which is the reported "two songs at once".
+# On Linux this coordinates over the session D-Bus.
+tauri-plugin-single-instance = "2"
 # InnerTube (library/search/playlist/album/artist) and lyrics (LRCLIB,
 # YouTube Music) both run as a JS-side "network subsystem" — see
 # src/lib/network.ts — using this plugin's `fetch`, not a Rust reqwest

@@ -7,13 +7,22 @@
 // syllable. The key is the pinyin with spaces removed, which is what
 // someone actually types: "nihao", "beijing".
 //
-// Candidates are capped per key and ordered by descending weight, because
-// a candidate bar shows a handful and the tail is never chosen — keeping
-// all of them would multiply the bundle for entries nobody reaches.
+// Candidates are ordered by descending weight and NOT capped per key.
+//
+// They used to be capped at 8, on the theory that a candidate bar shows a
+// handful and the tail is never chosen. That was wrong for Chinese: "shi"
+// alone has 131 entries here (是时事使市式试石十室师诗食史世实施视…), so a
+// cap of 8 made most homophones physically untypeable — you could not
+// enter 诗 or 世 at all. The keyboard pages through candidates now.
+//
+// The bundle argument didn't survive measurement either. Nearly every key
+// is a multi-syllable word with one or two candidates; only common single
+// syllables have long tails. Uncapping moves the file 890KB → 939KB, +5%,
+// for 12,000 more characters — and it is fetched on demand, not bundled
+// (see src/lib/pinyin.ts).
 import { readFileSync, writeFileSync } from "node:fs";
 
 const [, , SRC, OUT] = process.argv;
-const MAX_PER_KEY = 8;
 /** Below this weight an entry is a curiosity, not something a user of a
  *  car stereo is searching for. Keeps the dictionary to a size worth
  *  shipping. */
@@ -41,7 +50,7 @@ const out = {};
 let entries = 0;
 for (const [key, list] of byKey) {
   list.sort((a, b) => b[1] - a[1]);
-  const words = list.slice(0, MAX_PER_KEY).map(([w]) => w);
+  const words = list.map(([w]) => w);
   // Space-separated, NOT concatenated. Concatenating loses word
   // boundaries: "北京背景" is indistinguishable from four one-character
   // candidates, so typing "beijing" offered 北 instead of 北京. Chinese

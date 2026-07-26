@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  HeartIcon,
   Loader2Icon,
   PauseIcon,
   PlayIcon,
@@ -14,7 +13,7 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
-import { useLikedSongsStore } from "@/store/likedSongsStore";
+import { LikeButton } from "@/components/shared/like-button";
 import { LyricsBody, STAGE_LEADING, useDisplayLyrics } from "@/components/layout/lyrics-view";
 import { LyricsSourceButton } from "@/components/layout/lyrics-source-picker";
 import { QueueButton, QueuePanel } from "@/components/layout/queue-panel";
@@ -138,9 +137,6 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
   const setShuffle = usePlaybackStore((s) => s.setShuffle);
   const cycleRepeat = usePlaybackStore((s) => s.cycleRepeat);
   const track = index >= 0 ? queue[index] : undefined;
-
-  const isLiked = useLikedSongsStore((s) => (track ? s.isLiked(track.videoId) : false));
-  const toggleLiked = useLikedSongsStore((s) => s.toggle);
 
   // Lyrics are loaded by `useAudioEngine` on every track change now, not
   // here — see its comment. Fetching from this component meant a track
@@ -292,16 +288,7 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
           matter how many utility controls sit beside it. */}
       <div className="relative shrink-0 px-6 pb-[clamp(0.5rem,2.5vh,1.25rem)]">
         <div className={cn("flex items-center justify-center", BTN_GAP)}>
-          <button
-            type="button"
-            aria-label={isLiked ? "Remove from liked" : "Add to liked"}
-            aria-pressed={isLiked}
-            disabled={!hasTrack}
-            onClick={() => track && toggleLiked(track.videoId)}
-            className={cn(SECONDARY_BTN, isLiked && "text-brand")}
-          >
-            <HeartIcon className={isLiked ? "fill-current" : undefined} />
-          </button>
+          <LikeButton videoId={track?.videoId} className={SECONDARY_BTN} />
           <button
             type="button"
             aria-label="Shuffle"

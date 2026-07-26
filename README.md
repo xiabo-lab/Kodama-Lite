@@ -81,21 +81,49 @@ Type=simple
 Environment=WAYLAND_DISPLAY=wayland-0
 ExecStartPre=/bin/sh -c 'until [ -e "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; do sleep 1; done'
 ExecStart=/usr/bin/kodama-lite
-Restart=always
+# on-failure, NOT always: Settings → Quit calls `app.exit(0)`, and to
+# `Restart=always` a deliberate quit is indistinguishable from a crash, so
+# the app came straight back after three seconds. A crash or a display-less
+# start still exits non-zero and is still restarted, which is the whole
+# point of the unit — nobody can restart a dead app while driving.
+Restart=on-failure
 RestartSec=3
 
 [Install]
 WantedBy=default.target
 UNIT
-# Remove the desktop autostart first, or you get two copies.
+# Remove the autostart entry, or you get two copies.
 mv ~/.config/autostart/Kodama-Lite.desktop ~/ 2>/dev/null
+
+# The desktop icon is the other way a second copy gets launched — it runs
+# the binary directly, behind systemd's back. Point it at the service
+# instead, so tapping it starts (or re-starts, after a Quit) the one
+# managed instance rather than a rival process.
+cat > ~/Desktop/Kodama-Lite.desktop <<'ICON'
+[Desktop Entry]
+Type=Application
+Name=Kodama-Lite
+Icon=kodama-lite
+Exec=systemctl --user start kodama-lite.service
+Terminal=false
+StartupWMClass=kodama-lite
+ICON
+chmod +x ~/Desktop/Kodama-Lite.desktop
+
 systemctl --user daemon-reload
 systemctl --user enable --now kodama-lite.service
 ```
 
 `ExecStartPre` waits for the compositor: user services can start before the Wayland
-socket exists, and without a display the app exits immediately and `Restart=always`
-turns that into a loop.
+socket exists, and without a display the app exits immediately, which `RestartSec`
+would otherwise turn into a three-second loop.
+
+The service is the only thing that should launch the app. Anything else — the
+desktop icon, the applications menu — runs a second copy that gets its own stream
+server port and, with resume-on-startup, plays the last queue over the top of the
+first. The app refuses that now (`tauri-plugin-single-instance`: the duplicate
+raises the running window and exits), but keeping one launch path is what makes
+Quit and restart behave predictably.
 
 Read the log with:
 

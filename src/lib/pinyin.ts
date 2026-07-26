@@ -38,7 +38,18 @@ export function loadPinyinDict(): Promise<Dict> {
   return dictPromise;
 }
 
-const MAX_CANDIDATES = 9;
+/**
+ * Ceiling on how many candidates one buffer can produce. This is a sanity
+ * bound, not a display limit — the keyboard pages through the list, so it
+ * needs the whole thing. It was 9, which combined with the generator's old
+ * cap of 8 per key meant a syllable like "shi" (131 characters in the
+ * dictionary) offered eight and no way to reach the rest.
+ *
+ * Still bounded because a short buffer matches every shorter prefix too:
+ * without a stop, "z" would walk a good fraction of the dictionary to
+ * build a list nobody scrolls to the end of.
+ */
+const MAX_CANDIDATES = 200;
 
 /**
  * Candidates for a composing buffer.

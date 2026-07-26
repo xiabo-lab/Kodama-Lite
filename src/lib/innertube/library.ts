@@ -62,3 +62,41 @@ export async function fetchLikedSongs(): Promise<ShelfItem[]> {
   const page = await fetchPlaylistFirstPage("LM");
   return page.tracks;
 }
+
+/**
+ * How many pages of Liked Music to walk when seeding the heart state.
+ * A page is ~100 tracks, so this covers ~2,000 — deep enough that a song
+ * liked a long time ago still shows as liked, bounded so a large library
+ * doesn't turn sign-in into a minute of continuations. Tracks past the
+ * cut-off render as un-liked until the user likes them again, which is
+ * a display miss, not a data loss: `like/like` is idempotent.
+ */
+const LIKED_ID_PAGES = 20;
+
+/**
+ * Every liked videoId, as a Set, for deciding whether to draw the heart
+ * filled. Deliberately ids only — the callers (the player bar and the
+ * karaoke stage) need membership, not tracks, and dropping the rest keeps
+ * a 2,000-entry set to a few tens of KB.
+ *
+ * Pages sequentially rather than in parallel because each continuation
+ * token only exists once its own page has come back.
+ */
+export async function fetchLikedSongIds(): Promise<Set<string>> {
+  const { fetchPlaylistFirstPage, fetchPlaylistContinuation } = await import(
+    "./playlist"
+  );
+  const ids = new Set<string>();
+
+  const first = await fetchPlaylistFirstPage("LM");
+  for (const t of first.tracks) ids.add(t.id);
+
+  let token = first.continuationToken;
+  for (let page = 1; page < LIKED_ID_PAGES && token; page++) {
+    const next = await fetchPlaylistContinuation(token);
+    for (const t of next.tracks) ids.add(t.id);
+    token = next.continuationToken;
+  }
+
+  return ids;
+}

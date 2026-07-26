@@ -15,6 +15,7 @@ import { useArtistStore } from "@/store/artistStore";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useRadioStore } from "@/store/radioStore";
 import { useLyricsStore } from "@/store/lyricsStore";
+import { useLikedSongsStore } from "@/store/likedSongsStore";
 import { AppShell } from "@/app/AppShell";
 
 /**
@@ -84,7 +85,8 @@ export default function App() {
 const OFFLINE_RETRY_MS = 5000;
 
 /**
- * Keep asking while the answer is "offline".
+ * Keep asking while the answer is "offline", and refetch what the offline
+ * window cost us once it clears.
  *
  * The connectivity subsystem answers on demand and never volunteers a
  * transition, so before this the single boot-time probe was the whole
@@ -92,6 +94,13 @@ const OFFLINE_RETRY_MS = 5000;
  * phone's hotspot — the normal case, not an edge one — stayed marked
  * offline for the entire drive, with the banner up and resume-on-startup
  * never firing, until someone found Settings and pressed "Check now".
+ *
+ * The same boot race also cost the Home feed, and nothing put it back:
+ * `home:load` went out once at mount and once on an `auth:state`, and if
+ * both landed in that dead window the screen kept whatever was in
+ * localStorage until the next launch — while telling the user, in
+ * `Home.tsx`, that "it will retry automatically once you're back online".
+ * It did not. It does now.
  *
  * Deliberately a `subscribe` rather than a `useAppStore(...)` selector:
  * this component's only child is the entire app, so re-rendering it on a
@@ -120,7 +129,16 @@ function useOfflineRetry(): void {
 
     sync(useAppStore.getState().online);
     const unsubscribe = useAppStore.subscribe((s, prev) => {
-      if (s.online !== prev.online) sync(s.online);
+      if (s.online === prev.online) return;
+      sync(s.online);
+      // Coming back: re-request the two things that are silently wrong
+      // rather than visibly missing when they fail. Everything else in
+      // the app is fetched on navigation, so it recovers by being looked
+      // at; these two are fetched once at boot and never again.
+      if (s.online) {
+        dispatchContent({ type: "home:load" });
+        useLikedSongsStore.getState().sync();
+      }
     });
 
     return () => {

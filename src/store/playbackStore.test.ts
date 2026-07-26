@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { usePlaybackStore, type Track } from "@/store/playbackStore";
 
 /**
@@ -144,5 +144,80 @@ describe("applyEvents staleness guard", () => {
   it("folds ytdlp:state into ytdlpPhase", () => {
     usePlaybackStore.getState().applyEvents([{ type: "ytdlp:state", phase: "ready" }]);
     expect(usePlaybackStore.getState().ytdlpPhase).toBe("ready");
+  });
+});
+
+/**
+ * Volume has to survive a restart. It used to boot at a hardcoded 1, so
+ * every launch came back at full volume; the workaround was to turn the
+ * PipeWire stream down instead, which left the in-app slider reading 100%
+ * while the output sat at 45%. These lock the slider in as the control
+ * that actually holds.
+ *
+ * The store is created at import time, so rehydration can only be tested
+ * against a freshly imported module — hence `resetModules` plus a dynamic
+ * import rather than the top-level `usePlaybackStore`.
+ */
+describe("volume persistence", () => {
+  function stubStorage(seed: Record<string, string> = {}) {
+    const map = new Map(Object.entries(seed));
+    (globalThis as unknown as Record<string, unknown>).localStorage = {
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        map.set(k, v);
+      },
+      removeItem: (k: string) => {
+        map.delete(k);
+      },
+      clear: () => map.clear(),
+    };
+    return map;
+  }
+
+  async function freshStore(seed: Record<string, string> = {}) {
+    stubStorage(seed);
+    vi.resetModules();
+    return (await import("@/store/playbackStore")).usePlaybackStore;
+  }
+
+  it("writes the volume to storage when it changes", () => {
+    const map = stubStorage();
+    usePlaybackStore.getState().setVolume(0.4);
+    expect(JSON.parse(map.get("kl:volume")!)).toEqual({
+      volume: 0.4,
+      muted: false,
+    });
+  });
+
+  it("boots at the saved volume instead of full", async () => {
+    const store = await freshStore({
+      "kl:volume": JSON.stringify({ volume: 0.25, muted: false }),
+    });
+    expect(store.getState().volume).toBe(0.25);
+  });
+
+  it("boots at full volume when nothing is saved", async () => {
+    const store = await freshStore();
+    expect(store.getState().volume).toBe(1);
+    expect(store.getState().muted).toBe(false);
+  });
+
+  it("round-trips mute", async () => {
+    const store = await freshStore({
+      "kl:volume": JSON.stringify({ volume: 0.6, muted: true }),
+    });
+    expect(store.getState().muted).toBe(true);
+    expect(store.getState().volume).toBe(0.6);
+  });
+
+  // A bad value must not be able to make the car silent or deafening.
+  it.each([
+    ["out of range high", JSON.stringify({ volume: 42 })],
+    ["negative", JSON.stringify({ volume: -1 })],
+    ["not a number", JSON.stringify({ volume: "loud" })],
+    ["corrupt json", "{not json"],
+  ])("falls back to full volume on %s", async (_label, raw) => {
+    const store = await freshStore({ "kl:volume": raw });
+    expect(store.getState().volume).toBe(1);
   });
 });

@@ -55,11 +55,26 @@ export function QueuePanel({
   return (
     <div
       ref={panelRef}
+      // Solid black, not `bg-surface-active` + `backdrop-blur`. The
+      // translucent panel let the album art and track rows behind it show
+      // through the list, which on the Pi's panel read as two overlapping
+      // queues. Opaque also drops a full-panel backdrop filter per frame.
       className={cn(
-        "z-[55] flex h-[min(28rem,70vh)] w-[28rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-hairline bg-surface-active shadow-lg backdrop-blur",
+        // Height is bounded by the room ABOVE the player bar, not by a
+        // share of the viewport. `70vh` is 308px on the Pi's 440px panel
+        // but only ~287px is free once the bar and its margin are taken,
+        // so the panel ran off the top of the screen and took the Queue
+        // header — Clear and Close — with it. Measured at 1920x440 with
+        // the header sitting 21px above y=0.
+        "z-[55] flex h-[min(28rem,calc(100vh-10.5rem))] w-[28rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-hairline bg-black shadow-lg",
+        // Both placements now pin to the right edge — anchored over the
+        // button put the panel in the middle of the window, on top of the
+        // content it is meant to sit beside. `bottom-full` keeps it above
+        // the player bar it belongs to; `screen-right` is the karaoke
+        // stage, which has no bar to clear.
         placement === "screen-right"
           ? "fixed bottom-28 right-6"
-          : "absolute bottom-full left-1/2 mb-3 -translate-x-1/2",
+          : "absolute bottom-full right-0 mb-3",
       )}
     >
       <header className="flex shrink-0 items-center justify-between gap-2 border-b border-hairline px-3 py-2">
