@@ -17,11 +17,38 @@ interface PlaylistState {
    *  session keeps each one's scroll-loaded tracks cached instead of
    *  re-fetching from scratch on every back-navigation. */
   byId: Record<string, PlaylistEntry>;
+  /**
+   * Fold a like/unlike into a cached Liked Music page.
+   *
+   * `LM` is YouTube Music's magic id for Liked Music, and it's cached here
+   * like any other playlist — so after the first visit it kept showing the
+   * list it loaded, and a track liked afterwards only appeared on restart.
+   * Both spellings are patched: the page is fetched as `LM`, but the
+   * Library links to it by its browse id `VLLM`.
+   */
+  applyLikeChange: (track: ShelfItem, liked: boolean) => void;
   applyEvents: (events: ContentEvent[]) => void;
 }
 
+/** The ids Liked Music can be cached under. */
+const LIKED_IDS = ["LM", "VLLM"];
+
 export const usePlaylistStore = create<PlaylistState>((set, get) => ({
   byId: {},
+
+  applyLikeChange: (track, liked) => {
+    const byId = get().byId;
+    const next = { ...byId };
+    let touched = false;
+    for (const id of LIKED_IDS) {
+      const cur = next[id];
+      if (!cur) continue;
+      const without = cur.tracks.filter((t) => t.id !== track.id);
+      next[id] = { ...cur, tracks: liked ? [track, ...without] : without };
+      touched = true;
+    }
+    if (touched) set({ byId: next });
+  },
 
   applyEvents: (events) => {
     for (const e of events) {

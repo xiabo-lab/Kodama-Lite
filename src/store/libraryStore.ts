@@ -35,6 +35,21 @@ interface LibraryState {
   tabs: Record<LibraryTab, TabState>;
   /** Drop everything — called on sign-in and sign-out. */
   reset: () => void;
+  /**
+   * Fold a like/unlike into the already-loaded Songs tab.
+   *
+   * The Library only fetches a tab whose status is still `idle`, so once
+   * Songs had loaded it kept the list it was born with: liking a track
+   * reached the account (verified in the phone app) but the Liked Songs
+   * list here did not move until a restart. Patching the loaded list is
+   * what makes the change show at the moment of the tap, rather than
+   * refiring a ~100-track browse on every heart press.
+   *
+   * A tab that hasn't loaded is left alone — it will fetch the truth when
+   * it's first opened, and seeding it here would strand a one-row list
+   * looking like a complete library.
+   */
+  applyLikeChange: (track: ShelfItem, liked: boolean) => void;
   applyEvents: (events: ContentEvent[]) => void;
 }
 
@@ -51,6 +66,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   tabs: emptyTabs(),
 
   reset: () => set({ tabs: emptyTabs() }),
+
+  applyLikeChange: (track, liked) => {
+    const songs = get().tabs.songs;
+    if (songs.status === "idle") return;
+    const without = songs.tracks.filter((t) => t.id !== track.id);
+    // Newest-first, which is the order YouTube Music returns Liked Music
+    // in — so an insert at the front is where the server will put it too.
+    const tracks = liked ? [track, ...without] : without;
+    set((s) => ({
+      tabs: { ...s.tabs, songs: { ...s.tabs.songs, tracks } },
+    }));
+  },
 
   applyEvents: (events) => {
     for (const e of events) {

@@ -40,6 +40,18 @@ interface PlaybackState {
   duration: number;
   volume: number;
   muted: boolean;
+  /**
+   * Where the volume is actually applied.
+   *
+   * `system` — the data plane found our PipeWire stream, so the slider
+   * moves that directly and `el.volume` stays at 1. One attenuator, and
+   * the bar equals what comes out of the speakers.
+   *
+   * `webview` — no mixer to talk to (no stream yet, or no
+   * `pw-dump`/`wpctl`, as in a plain browser). Falls back to attenuating
+   * the media element, which is the old behaviour.
+   */
+  volumeMixer: "webview" | "system";
   shuffle: boolean;
   repeat: RepeatMode;
   error?: string;
@@ -147,6 +159,44 @@ function saveVolume(volume: number, muted: boolean): void {
   }
 }
 
+/**
+ * Push the slider's value to the real mixer, at most once per
+ * `VOLUME_PUSH_MS`.
+ *
+ * Dragging a range input fires an event per frame, and each push spawns two
+ * short-lived `wpctl` processes on the data-plane side — sixty a second
+ * would be absurd on a Pi. Throttled leading-and-trailing so the first
+ * movement is immediate (it must feel attached to the finger) and the value
+ * you let go on is always the one that lands.
+ *
+ * A no-op when there's no mixer: `audioEngine` attenuates the media element
+ * in that case instead.
+ */
+const VOLUME_PUSH_MS = 120;
+let volumePushTimer: number | undefined;
+let volumePushPending: { volume: number; muted: boolean } | undefined;
+
+function pushSystemVolume(
+  state: { volumeMixer: "webview" | "system" },
+  volume: number,
+  muted: boolean,
+): void {
+  if (state.volumeMixer !== "system") return;
+  volumePushPending = { volume, muted };
+  if (volumePushTimer !== undefined) return;
+  const flush = () => {
+    const next = volumePushPending;
+    volumePushPending = undefined;
+    if (!next) {
+      volumePushTimer = undefined;
+      return;
+    }
+    dispatch({ type: "volume:set", volume: next.volume, muted: next.muted });
+    volumePushTimer = window.setTimeout(flush, VOLUME_PUSH_MS);
+  };
+  flush();
+}
+
 /** Fire a `stream:resolve` for the now-current track. Never awaited — the
  *  URL arrives later as a `stream:ready` event. */
 function requestStream(videoId: string | undefined): void {
@@ -197,6 +247,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
     duration: cached.queue[cached.index]?.duration ?? 0,
     volume: savedVolume.volume,
     muted: savedVolume.muted,
+    // Assume no mixer until the data plane says otherwise; `volume:state`
+    // upgrades this and replaces the remembered value with the real one.
+    volumeMixer: "webview",
     shuffle: false,
     repeat: "off",
     ytdlpPhase: "downloading",
@@ -312,11 +365,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
       const volume = Math.max(0, Math.min(1, v));
       saveVolume(volume, false);
       set({ volume, muted: false });
+      pushSystemVolume(get(), volume, false);
     },
     toggleMute: () =>
       set((s) => {
         const muted = !s.muted;
         saveVolume(s.volume, muted);
+        pushSystemVolume(s, s.volume, muted);
         return { muted };
       }),
     setShuffle: (on) => set({ shuffle: on }),
@@ -332,6 +387,25 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
     applyEvents: (events) => {
       for (const e of events) {
         switch (e.type) {
+          case "volume:state": {
+            if (!e.available) {
+              // No mixer — keep whatever the slider says and let the media
+              // element attenuate. Never adopt the placeholder value that
+              // comes with an unavailable report.
+              set({ volumeMixer: "webview" });
+              break;
+            }
+            // The system is the source of truth once it answers: adopt its
+            // level so the bar opens showing what the speakers are really
+            // doing, rather than a remembered number that was only ever a
+            // multiplier on top of it.
+            set({
+              volumeMixer: "system",
+              volume: Math.max(0, Math.min(1, e.volume)),
+              muted: e.muted,
+            });
+            break;
+          }
           case "stream:ready": {
             const { queue, index } = get();
             const current = index >= 0 ? queue[index] : undefined;

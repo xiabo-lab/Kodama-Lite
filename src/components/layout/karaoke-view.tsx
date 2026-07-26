@@ -288,7 +288,7 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
           matter how many utility controls sit beside it. */}
       <div className="relative shrink-0 px-6 pb-[clamp(0.5rem,2.5vh,1.25rem)]">
         <div className={cn("flex items-center justify-center", BTN_GAP)}>
-          <LikeButton videoId={track?.videoId} className={SECONDARY_BTN} />
+          <LikeButton track={track} className={SECONDARY_BTN} />
           <button
             type="button"
             aria-label="Shuffle"

@@ -75,8 +75,73 @@ export default function App() {
   }, [applyEvents, applyContentEvents]);
 
   useOfflineRetry();
+  useVolumeProbe();
 
   return <AppShell />;
+}
+
+/** How often to ask the data plane for the real output volume while we
+ *  still don't have it, and how many times before giving up. */
+const VOLUME_PROBE_MS = 3000;
+const VOLUME_PROBE_TRIES = 20;
+
+/**
+ * Find the real mixer, then stop asking.
+ *
+ * `volume:get` can only answer once our PipeWire stream exists, and that
+ * doesn't happen until audio actually plays — so a single probe at mount
+ * would almost always come back `available: false` and leave the slider
+ * attenuating in the webview for the whole session. Poll until it answers,
+ * and start the count again whenever playback begins, which is the moment
+ * the node is most likely to have appeared.
+ *
+ * Bounded because "no mixer" is a legitimate permanent answer — a plain
+ * browser has no `wpctl` and never will, and an interval that never stops
+ * would spawn a dead command every three seconds forever.
+ */
+function useVolumeProbe(): void {
+  useEffect(() => {
+    let tries = 0;
+    let timer: number | undefined;
+
+    const stop = () => {
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    };
+
+    const tick = () => {
+      if (usePlaybackStore.getState().volumeMixer === "system") {
+        stop();
+        return;
+      }
+      if (tries++ >= VOLUME_PROBE_TRIES) {
+        stop();
+        return;
+      }
+      dispatch({ type: "volume:get" });
+    };
+
+    const start = () => {
+      tries = 0;
+      if (timer === undefined) timer = window.setInterval(tick, VOLUME_PROBE_MS);
+      tick();
+    };
+
+    start();
+
+    // Playback starting is the event that creates the stream node, so it's
+    // worth a fresh round even if an earlier one gave up.
+    const unsubscribe = usePlaybackStore.subscribe((s, prev) => {
+      if (s.playing && !prev.playing && s.volumeMixer !== "system") start();
+    });
+
+    return () => {
+      unsubscribe();
+      stop();
+    };
+  }, []);
 }
 
 /** How often to re-probe while offline. Long enough that a car parked in a

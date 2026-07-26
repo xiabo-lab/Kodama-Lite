@@ -1,5 +1,5 @@
 import { HeartIcon } from "lucide-react";
-import { useLikedSongsStore } from "@/store/likedSongsStore";
+import { useLikedSongsStore, type LikeTarget } from "@/store/likedSongsStore";
 import { useAuthStore } from "@/store/authStore";
 import { cn } from "@/lib/utils";
 
@@ -16,18 +16,21 @@ import { cn } from "@/lib/utils";
  * still moved would be lying.
  */
 export function LikeButton({
-  videoId,
+  track,
   className,
 }: {
-  videoId?: string;
+  /** The whole track, not just its id: liking has to insert a renderable
+   *  row into the Liked Music lists, which needs the title and artwork. */
+  track?: LikeTarget;
   className?: string;
 }) {
+  const videoId = track?.videoId;
   const liked = useLikedSongsStore((s) => (videoId ? s.ids.has(videoId) : false));
   const busy = useLikedSongsStore((s) => (videoId ? s.pending.has(videoId) : false));
   const toggle = useLikedSongsStore((s) => s.toggle);
   const signedIn = useAuthStore((s) => s.status === "signed-in");
 
-  const disabled = !videoId || !signedIn || busy;
+  const disabled = !track || !signedIn || busy;
 
   return (
     <button
@@ -36,7 +39,7 @@ export function LikeButton({
       aria-pressed={liked}
       disabled={disabled}
       title={signedIn ? undefined : "Sign in to like songs"}
-      onClick={() => videoId && toggle(videoId)}
+      onClick={() => track && toggle(track)}
       className={cn(className, liked && "text-brand")}
     >
       <HeartIcon className={liked ? "fill-current" : undefined} />

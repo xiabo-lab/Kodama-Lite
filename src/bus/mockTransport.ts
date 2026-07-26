@@ -106,6 +106,24 @@ export function createMockTransport(): Transport {
             80,
           );
           break;
+        case "volume:get":
+        case "volume:set":
+          // A browser tab has no PipeWire to move. Answering "unavailable"
+          // straight away — rather than staying silent — is what stops the
+          // view plane's probe retrying twenty times before it concludes
+          // the same thing, and puts it on the webview fallback path where
+          // the slider does work in dev.
+          setTimeout(
+            () =>
+              emit({
+                type: "volume:state",
+                volume: 1,
+                muted: false,
+                available: false,
+              }),
+            30,
+          );
+          break;
         case "app:quit":
           // A browser tab can't close itself unless script opened it, and
           // faking it (blanking the page) would make the Quit row look

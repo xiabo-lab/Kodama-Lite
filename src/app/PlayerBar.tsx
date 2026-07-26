@@ -133,7 +133,7 @@ export function PlayerBar() {
               `justify-between` distributes exactly the same spacing as
               before. */}
           <LikeButton
-            videoId={track?.videoId}
+            track={track}
             className={cn(ICON_BTN, "disabled:opacity-40 [&_svg]:size-10")}
           />
           <button

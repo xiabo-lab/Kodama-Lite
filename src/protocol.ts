@@ -55,6 +55,11 @@ export type Command =
   | { type: "cache:stats" }
   /** Delete every cached audio file. */
   | { type: "cache:clear" }
+  /** Ask what the speakers are actually at. The slider drives the PipeWire
+   *  stream rather than the webview — see `subsystems/volume.rs` for why
+   *  attenuating in the webview made the bar lie. */
+  | { type: "volume:get" }
+  | { type: "volume:set"; volume: number; muted: boolean }
   /** Close the app. The Pi boots straight into this window full-screen
    *  with no desktop chrome around it, so Settings' Quit row is the only
    *  way out that isn't an SSH session. */
@@ -92,7 +97,12 @@ export type AppEvent =
       action: "play" | "pause" | "toggle" | "next" | "previous" | "stop" | "seek";
       position?: number;
     }
-  | { type: "cache:stats"; count: number; bytes: number; dir: string };
+  | { type: "cache:stats"; count: number; bytes: number; dir: string }
+  /** The real output volume, linear 0..1. `available: false` means there is
+   *  no mixer to talk to — no audio stream yet, or no `pw-dump`/`wpctl`, as
+   *  in a plain browser — and the view plane attenuates in the webview
+   *  instead. */
+  | { type: "volume:state"; volume: number; muted: boolean; available: boolean };
 
 /** Wire names (kept in one place so both transports agree). `CMD_CHANNEL`
  *  is the Tauri command that receives every dispatch; `EVENT_CHANNEL` is the

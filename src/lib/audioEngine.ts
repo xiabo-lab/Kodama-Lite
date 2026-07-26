@@ -236,15 +236,28 @@ export function useAudioEngine(): void {
   // Volume / mute.
   const volume = usePlaybackStore((s) => s.volume);
   const muted = usePlaybackStore((s) => s.muted);
+  const mixer = usePlaybackStore((s) => s.volumeMixer);
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
-    // Loudness perception is logarithmic; a linear slider crams almost all
-    // the perceivable change into the bottom ~20%. A cubic curve tracks
+    if (mixer === "system") {
+      // The slider is driving the PipeWire stream directly
+      // (`subsystems/volume.rs`), so the element must stay out of the way.
+      // Attenuating here too was the bug: two multipliers in series, only
+      // one of them on screen, so the bar read 100% while the speakers
+      // played at 45%. `wpctl`'s scale is already perceptual, so the cubic
+      // curve below would double-apply as well.
+      el.volume = 1;
+      el.muted = false;
+      return;
+    }
+    // No mixer (a browser, or before the audio stream exists). Loudness
+    // perception is logarithmic; a linear slider crams almost all the
+    // perceivable change into the bottom ~20%. A cubic curve tracks
     // perceived loudness instead (same curve YTMLite uses).
     el.volume = Math.max(0, Math.min(1, volume)) ** 3;
     el.muted = muted;
-  }, [volume, muted]);
+  }, [volume, muted, mixer]);
 
   // Seek requests. `position` is ALSO written by `onTimeUpdate` above, so
   // this only pushes to the element when the two have genuinely diverged

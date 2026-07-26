@@ -65,6 +65,12 @@ pub enum Command {
     CacheStats,
     #[serde(rename = "cache:clear")]
     CacheClear,
+    /// Report the real output volume — see `subsystems::volume` for why the
+    /// slider drives PipeWire rather than the webview.
+    #[serde(rename = "volume:get")]
+    VolumeGet,
+    #[serde(rename = "volume:set")]
+    VolumeSet { volume: f64, muted: bool },
     /// Close the app — the Pi runs it full-screen with no desktop chrome,
     /// so the Settings screen's Quit row is the only way out.
     #[serde(rename = "app:quit")]
@@ -125,5 +131,16 @@ pub enum AppEvent {
         count: u64,
         bytes: u64,
         dir: String,
+    },
+    /// The real output volume, linear 0..1 (the scale a slider wants —
+    /// PipeWire's stored `channelVolumes` is its cube). `available: false`
+    /// means there is no mixer to talk to: no stream yet, or no
+    /// `pw-dump`/`wpctl`, as in a plain browser. The view plane falls back
+    /// to attenuating in the webview.
+    #[serde(rename = "volume:state")]
+    VolumeState {
+        volume: f64,
+        muted: bool,
+        available: bool,
     },
 }

@@ -2,6 +2,44 @@ import { create } from "zustand";
 import { fetchLikedSongIds } from "@/lib/innertube/library";
 import { likeTrack, removeRating } from "@/lib/innertube/mutations";
 import { hasSession } from "@/lib/innertube/shared";
+import { useLibraryStore } from "@/store/libraryStore";
+import { usePlaylistStore } from "@/store/playlistStore";
+import type { ShelfItem } from "@/lib/innertube/types";
+
+/**
+ * What the heart needs to know about a track. A superset of `videoId`
+ * because liking has to be able to *insert a row* into the Liked Music
+ * views, not just flip a boolean — without the title and artwork the new
+ * row would render blank until the next fetch.
+ */
+export interface LikeTarget {
+  videoId: string;
+  title?: string;
+  subtitle?: string;
+  thumbnail?: string;
+  duration?: number;
+}
+
+/** Adapt the player's `Track` to the `ShelfItem` the list views render. */
+function toShelfItem(track: LikeTarget): ShelfItem {
+  return {
+    kind: "song",
+    id: track.videoId,
+    title: track.title ?? "",
+    subtitle: track.subtitle,
+    thumbnails: track.thumbnail
+      ? [{ url: track.thumbnail, width: 60, height: 60 }]
+      : [],
+    duration: track.duration,
+  };
+}
+
+/** Patch every cached view of Liked Music, in both directions. */
+function syncLikedViews(track: LikeTarget, liked: boolean): void {
+  const item = toShelfItem(track);
+  useLibraryStore.getState().applyLikeChange(item, liked);
+  usePlaylistStore.getState().applyLikeChange(item, liked);
+}
 
 /**
  * Liked songs, synced with the signed-in YouTube Music account.
@@ -38,7 +76,7 @@ interface LikedSongsState {
   canLike: () => boolean;
   /** Fetch the account's liked set. Safe to call repeatedly. */
   sync: () => void;
-  toggle: (videoId: string) => void;
+  toggle: (track: LikeTarget) => void;
   /** Sign-out: drop everything, the next account must not inherit it. */
   reset: () => void;
 }
@@ -75,7 +113,8 @@ export const useLikedSongsStore = create<LikedSongsState>((set, get) => ({
       });
   },
 
-  toggle: (videoId) => {
+  toggle: (track) => {
+    const videoId = track?.videoId;
     if (!videoId || !hasSession()) return;
     const { ids, pending } = get();
     if (pending.has(videoId)) return;
@@ -90,6 +129,8 @@ export const useLikedSongsStore = create<LikedSongsState>((set, get) => ({
     const nextPending = new Set(pending);
     nextPending.add(videoId);
     set({ ids: nextIds, pending: nextPending });
+    // The Liked Music lists move with the heart, not on the next restart.
+    syncLikedViews(track, !wasLiked);
 
     const epoch = syncEpoch;
     const settle = (revert: boolean) => {
@@ -103,6 +144,9 @@ export const useLikedSongsStore = create<LikedSongsState>((set, get) => ({
         if (wasLiked) back.add(videoId);
         else back.delete(videoId);
         set({ ids: back, pending: p });
+        // Put the row back where it was too — the lists must not keep an
+        // entry the server rejected.
+        syncLikedViews(track, wasLiked);
       } else {
         set({ pending: p });
       }

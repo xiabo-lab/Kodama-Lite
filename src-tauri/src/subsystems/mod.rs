@@ -12,6 +12,7 @@ pub mod cache;
 pub mod connectivity;
 pub mod media;
 pub mod playback;
+pub mod volume;
 
 use tauri::AppHandle;
 
