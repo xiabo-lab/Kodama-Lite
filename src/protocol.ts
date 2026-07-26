@@ -55,11 +55,11 @@ export type Command =
   | { type: "cache:stats" }
   /** Delete every cached audio file. */
   | { type: "cache:clear" }
-  /** Ask what the speakers are actually at. The slider drives the PipeWire
-   *  stream rather than the webview — see `subsystems/volume.rs` for why
-   *  attenuating in the webview made the bar lie. */
+  /** What is the output currently set to? Used once, on a profile that
+   *  has never set a volume, so a fresh install starts where the system
+   *  already is instead of at full. The slider itself reaches the stream
+   *  through `el.volume` — see `lib/audioEngine.ts`. */
   | { type: "volume:get" }
-  | { type: "volume:set"; volume: number; muted: boolean }
   /** Close the app. The Pi boots straight into this window full-screen
    *  with no desktop chrome around it, so Settings' Quit row is the only
    *  way out that isn't an SSH session. */

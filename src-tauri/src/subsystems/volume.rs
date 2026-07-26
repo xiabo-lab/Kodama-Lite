@@ -1,31 +1,38 @@
-//! Output volume, as the system actually sees it.
+//! Reading the current output volume — and only reading it.
 //!
-//! The app used to attenuate in the webview — `el.volume = slider³` — which
-//! made the slider a *second* control stacked on top of the PipeWire stream
-//! volume it could neither read nor set. WirePlumber persists that stream
-//! volume keyed by `media.role` (Kodama-Lite declares `Music`, the same role
-//! YTMLite uses, so they share one saved value), and it restores it after
-//! the webview has already set its own. The result was a slider pinned at
-//! 100% while the speakers played at 45%, with no way to tell from inside
-//! the app.
+//! This exists for one job: on a profile that has never set a volume, tell
+//! the UI what the output is already at, so a fresh install opens the
+//! slider there instead of at full.
 //!
-//! So the slider drives the real thing now. `el.volume` stays at 1.0 and
-//! this subsystem moves the PipeWire stream, which means one attenuator,
-//! and a bar position that always equals what comes out.
+//! It is deliberately not a mixer. An earlier version of this file also
+//! *set* the volume with `wpctl`, on the theory that the app slider and the
+//! PipeWire stream were two independent attenuators in series. Measuring on
+//! the device disproved that: `el.volume` in the webview is written through
+//! to the stream's `channelVolumes`, and `wpctl` displays the cube root of
+//! that, so the app's cubic curve and PipeWire's cube root cancel exactly —
+//! slider 0.37 reads back as `wpctl` 0.37. The UI already owns this value.
+//! Writing it from here as well produced two writers racing, which ended
+//! with the stream pinned at 1.0 and the app playing at full volume.
 //!
-//! Implemented by shelling out to `pw-dump` (to find our own node) and
-//! `wpctl` (to read and write it) rather than linking the PipeWire client
-//! library: both ship with the Pi's PipeWire/WirePlumber install, the app
-//! already spawns yt-dlp so process-spawning is not a new capability here,
-//! and a C binding would be a hard dependency for something that must
-//! degrade gracefully anyway. Every failure path reports
-//! `available: false`, and the view plane falls back to webview volume —
-//! which is what happens in `vite dev` in a browser, where there is no
-//! PipeWire at all.
+//! The real bug was narrower: WirePlumber restores its remembered volume
+//! for the `media.role=Music` stream when the node is created, which is
+//! after the webview has assigned `el.volume`, and WebKit only propagates a
+//! *change* — so an assignment equal to what the element already held was a
+//! no-op and WirePlumber's value silently won. The fix is in
+//! `lib/audioEngine.ts`: re-assert the volume once playback has actually
+//! started.
+//!
+//! Shells out to `pw-dump` (to find our own node) and `wpctl` (to read it)
+//! rather than linking the PipeWire client library: both ship with the Pi's
+//! install, the app already spawns yt-dlp so this is not a new capability,
+//! and a C binding would be a hard dependency for something that has to
+//! degrade gracefully anyway. Any failure reports `available: false` and
+//! the UI simply keeps its own value — which is what a plain browser gets,
+//! since there is no `wpctl` there.
 //!
 //! Scale note: `wpctl` speaks the *linear* volume a slider wants, while
-//! PipeWire stores `channelVolumes` as its cube. Everything crossing the
-//! bus is the linear value.
+//! PipeWire stores `channelVolumes` as its cube. What crosses the bus is
+//! the linear value, which is the same scale as the slider.
 
 use std::process::Command as OsCommand;
 use std::sync::Mutex;
@@ -140,44 +147,8 @@ pub fn get(app: &AppHandle) {
     });
 }
 
-fn apply(id: u32, volume: f64, muted: bool) -> bool {
-    let v = volume.clamp(0.0, 1.0);
-    let vol_ok = OsCommand::new("wpctl")
-        .args(["set-volume", &id.to_string(), &format!("{v:.4}")])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    let mute_ok = OsCommand::new("wpctl")
-        .args([
-            "set-mute",
-            &id.to_string(),
-            if muted { "1" } else { "0" },
-        ])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    vol_ok && mute_ok
-}
-
-/// Set the output volume. Deliberately emits nothing on success: the slider
-/// is already showing this value (the view plane is optimistic, exactly like
-/// the like button), and echoing it back mid-drag would fight the user's
-/// finger. Only a failure is reported, so the UI can fall back.
-pub fn set(app: &AppHandle, volume: f64, muted: bool) {
-    let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let try_with = |force: bool| node_id(force).is_some_and(|id| apply(id, volume, muted));
-        // Same two-step as `get`: the cached id, then a fresh resolve.
-        let ok = try_with(false) || try_with(true);
-        if !ok {
-            emit(
-                &app,
-                AppEvent::VolumeState {
-                    volume,
-                    muted,
-                    available: false,
-                },
-            );
-        }
-    });
-}
+// There is deliberately no `set` here. Writing the volume from this side
+// was tried and removed: measured on the device, `el.volume` in the webview
+// is written straight through to the stream's `channelVolumes`, so the UI
+// already controls this exact value and a second writer only fought it.
+// See the module comment above and `lib/audioEngine.ts`.

@@ -65,12 +65,10 @@ pub enum Command {
     CacheStats,
     #[serde(rename = "cache:clear")]
     CacheClear,
-    /// Report the real output volume — see `subsystems::volume` for why the
-    /// slider drives PipeWire rather than the webview.
+    /// Report the current output volume, for seeding the slider on a
+    /// profile that has never set one. Read-only — see `subsystems::volume`.
     #[serde(rename = "volume:get")]
     VolumeGet,
-    #[serde(rename = "volume:set")]
-    VolumeSet { volume: f64, muted: bool },
     /// Close the app — the Pi runs it full-screen with no desktop chrome,
     /// so the Settings screen's Quit row is the only way out.
     #[serde(rename = "app:quit")]

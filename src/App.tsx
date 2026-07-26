@@ -80,67 +80,26 @@ export default function App() {
   return <AppShell />;
 }
 
-/** How often to ask the data plane for the real output volume while we
- *  still don't have it, and how many times before giving up. */
-const VOLUME_PROBE_MS = 3000;
-const VOLUME_PROBE_TRIES = 20;
+/** When to ask what the output is already set to. The PipeWire node only
+ *  exists once audio is playing, so a single probe at mount would usually
+ *  find nothing — hence a couple of later attempts. */
+const VOLUME_PROBE_MS = [0, 2000, 6000];
 
 /**
- * Find the real mixer, then stop asking.
+ * Ask the data plane for the current output volume, so a profile that has
+ * never set one starts where the system already is rather than at full.
  *
- * `volume:get` can only answer once our PipeWire stream exists, and that
- * doesn't happen until audio actually plays — so a single probe at mount
- * would almost always come back `available: false` and leave the slider
- * attenuating in the webview for the whole session. Poll until it answers,
- * and start the count again whenever playback begins, which is the moment
- * the node is most likely to have appeared.
- *
- * Bounded because "no mixer" is a legitimate permanent answer — a plain
- * browser has no `wpctl` and never will, and an interval that never stops
- * would spawn a dead command every three seconds forever.
+ * `playbackStore` ignores the answer once it has a remembered value, so
+ * these are cheap no-ops on every launch but the first — which is why this
+ * is a short fixed schedule and not a poll. A plain browser answers
+ * `available: false` immediately and nothing happens at all.
  */
 function useVolumeProbe(): void {
   useEffect(() => {
-    let tries = 0;
-    let timer: number | undefined;
-
-    const stop = () => {
-      if (timer !== undefined) {
-        window.clearInterval(timer);
-        timer = undefined;
-      }
-    };
-
-    const tick = () => {
-      if (usePlaybackStore.getState().volumeMixer === "system") {
-        stop();
-        return;
-      }
-      if (tries++ >= VOLUME_PROBE_TRIES) {
-        stop();
-        return;
-      }
-      dispatch({ type: "volume:get" });
-    };
-
-    const start = () => {
-      tries = 0;
-      if (timer === undefined) timer = window.setInterval(tick, VOLUME_PROBE_MS);
-      tick();
-    };
-
-    start();
-
-    // Playback starting is the event that creates the stream node, so it's
-    // worth a fresh round even if an earlier one gave up.
-    const unsubscribe = usePlaybackStore.subscribe((s, prev) => {
-      if (s.playing && !prev.playing && s.volumeMixer !== "system") start();
-    });
-
-    return () => {
-      unsubscribe();
-      stop();
-    };
+    const timers = VOLUME_PROBE_MS.map((delay) =>
+      window.setTimeout(() => dispatch({ type: "volume:get" }), delay),
+    );
+    return () => timers.forEach((t) => window.clearTimeout(t));
   }, []);
 }
 

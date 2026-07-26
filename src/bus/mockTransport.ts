@@ -107,7 +107,6 @@ export function createMockTransport(): Transport {
           );
           break;
         case "volume:get":
-        case "volume:set":
           // A browser tab has no PipeWire to move. Answering "unavailable"
           // straight away — rather than staying silent — is what stops the
           // view plane's probe retrying twenty times before it concludes

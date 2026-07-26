@@ -40,18 +40,6 @@ interface PlaybackState {
   duration: number;
   volume: number;
   muted: boolean;
-  /**
-   * Where the volume is actually applied.
-   *
-   * `system` — the data plane found our PipeWire stream, so the slider
-   * moves that directly and `el.volume` stays at 1. One attenuator, and
-   * the bar equals what comes out of the speakers.
-   *
-   * `webview` — no mixer to talk to (no stream yet, or no
-   * `pw-dump`/`wpctl`, as in a plain browser). Falls back to attenuating
-   * the media element, which is the old behaviour.
-   */
-  volumeMixer: "webview" | "system";
   shuffle: boolean;
   repeat: RepeatMode;
   error?: string;
@@ -133,23 +121,35 @@ const VOLUME_CACHE_KEY = "kl:volume";
  * of them visible. Persisting this makes the slider the control that
  * actually holds, so the system one can stay where it belongs.
  */
-function loadVolume(): { volume: number; muted: boolean } {
+function loadVolume(): { volume: number; muted: boolean; saved: boolean } {
   try {
     const raw = localStorage.getItem(VOLUME_CACHE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as { volume?: number; muted?: boolean };
       const v = Number(parsed.volume);
       // A corrupt or out-of-range value must not be able to make the next
-      // launch silent OR deafening — fall back to full rather than trust it.
+      // launch silent OR deafening — fall back rather than trust it.
       if (Number.isFinite(v) && v >= 0 && v <= 1) {
-        return { volume: v, muted: !!parsed.muted };
+        return { volume: v, muted: !!parsed.muted, saved: true };
       }
     }
   } catch {
     /* corrupt — fall through to the default */
   }
-  return { volume: 1, muted: false };
+  return { volume: 1, muted: false, saved: false };
 }
+
+/**
+ * True until the slider has a value of its own.
+ *
+ * With nothing saved the slider would start at 1 and, because it asserts
+ * itself onto the audio stream now, a fresh profile would open at full
+ * volume — which is the complaint that started this, in a new costume. So
+ * on a first run the app asks the data plane what the output is currently
+ * set to (`volume:get`) and starts there instead. Exactly once: afterwards
+ * the remembered value is the truth.
+ */
+let seedVolumeFromSystem = false;
 
 function saveVolume(volume: number, muted: boolean): void {
   try {
@@ -157,44 +157,6 @@ function saveVolume(volume: number, muted: boolean): void {
   } catch {
     /* quota / private mode — non-fatal, in-memory state still works */
   }
-}
-
-/**
- * Push the slider's value to the real mixer, at most once per
- * `VOLUME_PUSH_MS`.
- *
- * Dragging a range input fires an event per frame, and each push spawns two
- * short-lived `wpctl` processes on the data-plane side — sixty a second
- * would be absurd on a Pi. Throttled leading-and-trailing so the first
- * movement is immediate (it must feel attached to the finger) and the value
- * you let go on is always the one that lands.
- *
- * A no-op when there's no mixer: `audioEngine` attenuates the media element
- * in that case instead.
- */
-const VOLUME_PUSH_MS = 120;
-let volumePushTimer: number | undefined;
-let volumePushPending: { volume: number; muted: boolean } | undefined;
-
-function pushSystemVolume(
-  state: { volumeMixer: "webview" | "system" },
-  volume: number,
-  muted: boolean,
-): void {
-  if (state.volumeMixer !== "system") return;
-  volumePushPending = { volume, muted };
-  if (volumePushTimer !== undefined) return;
-  const flush = () => {
-    const next = volumePushPending;
-    volumePushPending = undefined;
-    if (!next) {
-      volumePushTimer = undefined;
-      return;
-    }
-    dispatch({ type: "volume:set", volume: next.volume, muted: next.muted });
-    volumePushTimer = window.setTimeout(flush, VOLUME_PUSH_MS);
-  };
-  flush();
 }
 
 /** Fire a `stream:resolve` for the now-current track. Never awaited — the
@@ -236,6 +198,7 @@ function loadTrackAt(
 export const usePlaybackStore = create<PlaybackState>((set, get) => {
   const cached = loadQueueCache();
   const savedVolume = loadVolume();
+  seedVolumeFromSystem = !savedVolume.saved;
   return {
     queue: cached.queue,
     index: cached.index,
@@ -247,9 +210,6 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
     duration: cached.queue[cached.index]?.duration ?? 0,
     volume: savedVolume.volume,
     muted: savedVolume.muted,
-    // Assume no mixer until the data plane says otherwise; `volume:state`
-    // upgrades this and replaces the remembered value with the real one.
-    volumeMixer: "webview",
     shuffle: false,
     repeat: "off",
     ytdlpPhase: "downloading",
@@ -365,13 +325,11 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
       const volume = Math.max(0, Math.min(1, v));
       saveVolume(volume, false);
       set({ volume, muted: false });
-      pushSystemVolume(get(), volume, false);
     },
     toggleMute: () =>
       set((s) => {
         const muted = !s.muted;
         saveVolume(s.volume, muted);
-        pushSystemVolume(s, s.volume, muted);
         return { muted };
       }),
     setShuffle: (on) => set({ shuffle: on }),
@@ -388,22 +346,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
       for (const e of events) {
         switch (e.type) {
           case "volume:state": {
-            if (!e.available) {
-              // No mixer — keep whatever the slider says and let the media
-              // element attenuate. Never adopt the placeholder value that
-              // comes with an unavailable report.
-              set({ volumeMixer: "webview" });
-              break;
-            }
-            // The system is the source of truth once it answers: adopt its
-            // level so the bar opens showing what the speakers are really
-            // doing, rather than a remembered number that was only ever a
-            // multiplier on top of it.
-            set({
-              volumeMixer: "system",
-              volume: Math.max(0, Math.min(1, e.volume)),
-              muted: e.muted,
-            });
+            // Only ever used to pick a *starting* value on a profile that
+            // has never set one. After that the slider is authoritative and
+            // asserts itself onto the stream (see `audioEngine`), so
+            // adopting the system reading again would fight the user —
+            // and, since the two are the same scale, would be a no-op at
+            // best and a jump at worst.
+            if (!e.available || !seedVolumeFromSystem) break;
+            seedVolumeFromSystem = false;
+            const volume = Math.max(0, Math.min(1, e.volume));
+            saveVolume(volume, e.muted);
+            set({ volume, muted: e.muted });
             break;
           }
           case "stream:ready": {

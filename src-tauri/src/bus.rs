@@ -47,7 +47,6 @@ pub async fn handle_command(app: AppHandle, command: Command) {
         Command::CacheStats => subsystems::cache::stats(&app),
         Command::CacheClear => subsystems::cache::clear(&app),
         Command::VolumeGet => subsystems::volume::get(&app),
-        Command::VolumeSet { volume, muted } => subsystems::volume::set(&app, volume, muted),
         Command::AppQuit => subsystems::quit(&app),
     }
 }

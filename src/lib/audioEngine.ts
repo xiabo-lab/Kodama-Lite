@@ -234,30 +234,62 @@ export function useAudioEngine(): void {
   }, [playing]);
 
   // Volume / mute.
+  //
+  // Loudness perception is logarithmic; a linear slider crams almost all the
+  // perceivable change into the bottom ~20%. A cubic curve tracks perceived
+  // loudness instead (same curve YTMLite uses).
+  //
+  // That curve also happens to line the slider up exactly with the system
+  // mixer, which is worth knowing before "simplifying" it away. On the Pi,
+  // `el.volume` is written straight through to the PipeWire stream's
+  // `channelVolumes`, and `wpctl` displays the cube root of that — so
+  // `cbrt(slider³)` is `slider`. Measured on device: slider 0.37 →
+  // `wpctl get-volume` 0.37. The app slider IS the system stream volume,
+  // on the same scale. There is no second attenuator to fight.
   const volume = usePlaybackStore((s) => s.volume);
   const muted = usePlaybackStore((s) => s.muted);
-  const mixer = usePlaybackStore((s) => s.volumeMixer);
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
-    if (mixer === "system") {
-      // The slider is driving the PipeWire stream directly
-      // (`subsystems/volume.rs`), so the element must stay out of the way.
-      // Attenuating here too was the bug: two multipliers in series, only
-      // one of them on screen, so the bar read 100% while the speakers
-      // played at 45%. `wpctl`'s scale is already perceptual, so the cubic
-      // curve below would double-apply as well.
-      el.volume = 1;
-      el.muted = false;
-      return;
-    }
-    // No mixer (a browser, or before the audio stream exists). Loudness
-    // perception is logarithmic; a linear slider crams almost all the
-    // perceivable change into the bottom ~20%. A cubic curve tracks
-    // perceived loudness instead (same curve YTMLite uses).
     el.volume = Math.max(0, Math.min(1, volume)) ** 3;
     el.muted = muted;
-  }, [volume, muted, mixer]);
+  }, [volume, muted]);
+
+  // Assert that volume onto the stream once the stream actually exists.
+  //
+  // This is the fix for "the bar says 100% but it plays at 45%". WebKit
+  // only propagates a *change* to `el.volume`, and the PipeWire stream node
+  // isn't created until playback really starts — at which point WirePlumber
+  // restores its own remembered volume for the `media.role=Music` stream
+  // (a value shared with YTMLite, which declares the same role). The effect
+  // above has already run by then, and if our target equals what the
+  // element is holding, assigning it again is a no-op. So WirePlumber's
+  // value won, silently, and the slider had no way to show it.
+  //
+  // Two passes because the node's creation races this, and a nudge through
+  // a slightly *lower* value first so the assignment is always a real
+  // change. Never nudge upward: a momentary jump to full volume is exactly
+  // the thing this whole area of the code is trying not to do.
+  useEffect(() => {
+    if (!playing) return;
+    let cancelled = false;
+    const assert = () => {
+      const el = audioRef.current;
+      if (cancelled || !el) return;
+      const s = usePlaybackStore.getState();
+      const target = Math.max(0, Math.min(1, s.volume)) ** 3;
+      if (el.volume === target) el.volume = target * 0.98;
+      el.volume = target;
+      el.muted = s.muted;
+    };
+    const first = window.setTimeout(assert, 150);
+    const second = window.setTimeout(assert, 800);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(first);
+      window.clearTimeout(second);
+    };
+  }, [playing, streamUrl]);
 
   // Seek requests. `position` is ALSO written by `onTimeUpdate` above, so
   // this only pushes to the element when the two have genuinely diverged
