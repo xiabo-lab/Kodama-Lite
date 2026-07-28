@@ -16,7 +16,20 @@ use crate::protocol::AppEvent;
 pub fn check(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let started = std::time::Instant::now();
         let online = reachable().await;
+        // Logged because this probe's *timing* is what a boot-time hang
+        // looks like from the outside. A cold boot beats Wi-Fi
+        // association, the connect fails with ENETUNREACH in microseconds
+        // rather than milliseconds, and anything downstream that waits for
+        // a confirmed connection — resume-on-startup especially — depends
+        // on this answer being delivered. When the panel is lit but silent
+        // again, this line says whether the probe ran, what it decided,
+        // and how long it took to decide it.
+        eprintln!(
+            "[net] probe: online={online} in {:.3}s",
+            started.elapsed().as_secs_f64()
+        );
         emit(&app, AppEvent::NetStatus { online });
     });
 }

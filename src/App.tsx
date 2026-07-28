@@ -135,8 +135,23 @@ function useOfflineRetry(): void {
   useEffect(() => {
     let timer: number | undefined;
 
-    const sync = (online: boolean) => {
-      if (online) {
+    // Keep asking until the probe has actually *answered* — not merely
+    // until `online` looks true.
+    //
+    // `online` starts optimistically `true`, so "offline" was the only
+    // state that armed this retry, and an answer that never arrived left
+    // nothing to retry: the app looked online, asked nobody, and
+    // resume-on-startup waited on `netChecked` forever. Treating
+    // unanswered as unsettled means a lost or failed boot probe costs at
+    // most one interval instead of the whole session. `tauriTransport`
+    // closes the race that lost it in the first place; this is what makes
+    // the boot handshake recover from *any* lost reply rather than from
+    // that one known cause.
+    const settled = (s: { online: boolean; netChecked: boolean }) =>
+      s.online && s.netChecked;
+
+    const sync = (s: { online: boolean; netChecked: boolean }) => {
+      if (settled(s)) {
         if (timer !== undefined) {
           window.clearInterval(timer);
           timer = undefined;
@@ -151,15 +166,21 @@ function useOfflineRetry(): void {
       }
     };
 
-    sync(useAppStore.getState().online);
+    sync(useAppStore.getState());
     const unsubscribe = useAppStore.subscribe((s, prev) => {
-      if (s.online === prev.online) return;
-      sync(s.online);
+      if (s.online === prev.online && s.netChecked === prev.netChecked) return;
+      sync(s);
       // Coming back: re-request the two things that are silently wrong
       // rather than visibly missing when they fail. Everything else in
       // the app is fetched on navigation, so it recovers by being looked
       // at; these two are fetched once at boot and never again.
-      if (s.online) {
+      //
+      // Strictly the offline→online edge. `netChecked` flipping now wakes
+      // this subscriber too, and on an ordinary boot — where the first
+      // probe simply succeeds — `online` was already optimistically true,
+      // so `s.online` alone would refetch a feed that mount had just
+      // fetched, on every single launch.
+      if (s.online && !prev.online) {
         dispatchContent({ type: "home:load" });
         useLikedSongsStore.getState().sync();
       }

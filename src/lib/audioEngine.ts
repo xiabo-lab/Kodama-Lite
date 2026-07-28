@@ -103,6 +103,114 @@ export function useAudioEngine(): void {
     return () => window.clearInterval(id);
   }, [track, playingForMedia, durationForMedia]);
 
+  // ── The *other* MPRIS player ────────────────────────────────────────
+  //
+  // WebKitGTK publishes an MPRIS service of its own for any playing media
+  // element — `org.mpris.MediaPlayer2.org.webkit.app-<hash>.Sandboxed
+  // .instance-N` — alongside the one `subsystems/media.rs` registers. Two
+  // players, one stream. `mpris-proxy` bridges MPRIS to Bluetooth AVRCP,
+  // and which one a head unit ends up addressing is a race at connect
+  // time; the `instance-N` counter moves whenever the media session is
+  // rebuilt, so it can differ between drives.
+  //
+  // Unfed, WebKit's player falls back to the document title, with no
+  // artist and no art. Read off the Pi while a track was playing:
+  //
+  //   kodamalite  → title "伯虎说", artist "伯爵Johnny, 唐伯虎Annie", artUrl
+  //   webkit      → title "Kodama-Lite", artist [""], album "", no art
+  //
+  // That is exactly the Tesla showing no song information and its
+  // transport buttons doing nothing — a bare `<audio>` element has no
+  // action handlers, so Next/Previous reach WebKit and die there.
+  //
+  // Suppressing WebKit's player is possible (the `MediaSessionEnabled`
+  // runtime feature, via `webkit_settings_set_feature_enabled`) but means
+  // FFI against the webview to remove a service the platform is right to
+  // publish. Feeding it is both simpler and strictly more robust: whichever
+  // player the car addresses, it now gets correct metadata and working
+  // controls. This is also the idiomatic answer — the audio really is
+  // coming from a media element, and `navigator.mediaSession` is how a page
+  // describes it to the OS.
+  //
+  // Guarded because the browser harness and the unit tests have no
+  // `mediaSession`, and Safari/WebKit throws on unknown action names.
+  useEffect(() => {
+    const ms = typeof navigator !== "undefined" ? navigator.mediaSession : undefined;
+    if (!ms) return;
+    const set = (action: MediaSessionAction, handler: () => void) => {
+      try {
+        ms.setActionHandler(action, handler);
+      } catch {
+        /* action unsupported by this engine — the others still bind */
+      }
+    };
+    const store = usePlaybackStore.getState;
+    set("play", () => store().resume());
+    set("pause", () => usePlaybackStore.setState({ playing: false }));
+    set("stop", () => usePlaybackStore.setState({ playing: false }));
+    set("nexttrack", () => store().next());
+    set("previoustrack", () => store().prev());
+    try {
+      ms.setActionHandler("seekto", (details) => {
+        if (typeof details.seekTime === "number") store().seek(details.seekTime);
+      });
+    } catch {
+      /* no seek support — the scrubber stays read-only */
+    }
+    return () => {
+      for (const a of [
+        "play",
+        "pause",
+        "stop",
+        "nexttrack",
+        "previoustrack",
+        "seekto",
+      ] as MediaSessionAction[]) {
+        try {
+          ms.setActionHandler(a, null);
+        } catch {
+          /* never bound */
+        }
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const ms = typeof navigator !== "undefined" ? navigator.mediaSession : undefined;
+    if (!ms) return;
+    if (!track) {
+      ms.metadata = null;
+      ms.playbackState = "none";
+      return;
+    }
+    ms.metadata = new MediaMetadata({
+      title: track.title,
+      artist: track.subtitle ?? "",
+      artwork: track.thumbnail ? [{ src: track.thumbnail }] : [],
+    });
+    ms.playbackState = playingForMedia ? "playing" : "paused";
+  }, [track, playingForMedia]);
+
+  // Position is pushed on the same 2s cadence as the MPRIS scrubber above
+  // rather than on `timeupdate`, for the same reason. `setPositionState`
+  // throws on a duration that isn't a finite positive number, or on a
+  // position past it — both of which happen normally while a track loads.
+  const positionForMedia = usePlaybackStore((s) => s.position);
+  useEffect(() => {
+    const ms = typeof navigator !== "undefined" ? navigator.mediaSession : undefined;
+    if (!ms?.setPositionState) return;
+    if (!Number.isFinite(durationForMedia) || durationForMedia <= 0) return;
+    try {
+      ms.setPositionState({
+        duration: durationForMedia,
+        position: Math.min(Math.max(positionForMedia, 0), durationForMedia),
+        playbackRate: 1,
+      });
+    } catch {
+      /* transient inconsistency while a track swaps — next tick fixes it */
+    }
+  }, [durationForMedia, positionForMedia]);
+
   // ── Lyrics ──────────────────────────────────────────────────────────
   //
   // Fetched here, on every track change, rather than from the karaoke
