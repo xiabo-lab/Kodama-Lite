@@ -28,9 +28,21 @@ const HINT_MS = 3000;
  */
 export function ConfirmLyricsButton({
   className,
+  boxClassName = "size-full",
   iconClassName = "size-5",
 }: {
+  /** The HIT AREA — sizing and positioning of the tappable region. */
   className?: string;
+  /**
+   * The DRAWN box, centred inside the hit area.
+   *
+   * Kept separate because the two want different answers. On the karaoke
+   * stage the target is 88px so it can be hit while driving, but a green
+   * square that large is a lot of colour to leave sitting in the corner of
+   * a lyric screen. Defaults to filling the hit area, which is what the
+   * player bar wants — there, the button is small and so is the target.
+   */
+  boxClassName?: string;
   iconClassName?: string;
 }) {
   const lyrics = useLyricsStore((s) => s.lyrics);
@@ -85,6 +97,9 @@ export function ConfirmLyricsButton({
 
   return (
     <div className={cn("relative", className)}>
+      {/* The button is the whole hit area and draws nothing itself; the
+          span inside it is what you see. Padding is target, not
+          decoration — the same trick the seek slider uses. */}
       <button
         type="button"
         aria-label={
@@ -94,14 +109,21 @@ export function ConfirmLyricsButton({
         disabled={!enabled}
         onClick={onPress}
         className={cn(
-          "flex size-full items-center justify-center rounded-md border-2 transition-colors",
-          confirmed
-            ? "border-emerald-500 bg-emerald-500 text-black"
-            : "border-emerald-500/60 text-emerald-500 hover:bg-emerald-500/20",
+          "group flex size-full items-center justify-center",
           !enabled && "pointer-events-none opacity-25",
         )}
       >
-        <CheckIcon className={iconClassName} />
+        <span
+          className={cn(
+            "flex items-center justify-center rounded-md border-2 transition-colors",
+            confirmed
+              ? "border-emerald-500 bg-emerald-500 text-black"
+              : "border-emerald-500/60 text-emerald-500 group-hover:bg-emerald-500/20",
+            boxClassName,
+          )}
+        >
+          <CheckIcon className={iconClassName} />
+        </span>
       </button>
       {/* Above the button and out of the way of a thumb that is still on
           it. `pointer-events-none` so it can never eat the next tap. */}

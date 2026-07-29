@@ -16,10 +16,16 @@ import { cn } from "@/lib/utils";
  */
 export function LyricsSearchButton({
   className,
+  boxClassName,
   onOpenChange,
   disabled = false,
 }: {
+  /** The HIT AREA — sizing and positioning of the tappable region. */
   className?: string;
+  /** The DRAWN box, centred inside the hit area. Omitted, the button draws
+   *  itself at whatever `className` sizes it to; supplied, the target can
+   *  be far larger than the thing you see. See `ConfirmLyricsButton`. */
+  boxClassName?: string;
   /** Told whenever the full-screen search opens or closes, so the karaoke
    *  stage can keep its lyrics column narrowed while it is up. */
   onOpenChange?: (open: boolean) => void;
@@ -41,9 +47,20 @@ export function LyricsSearchButton({
         aria-label="Search lyrics"
         disabled={disabled}
         onClick={() => setOpen(true)}
-        className={cn(className, (open || hasResults) && "text-brand")}
+        className={cn("group", className, (open || hasResults) && "text-brand")}
       >
-        <SearchIcon />
+        {boxClassName ? (
+          <span
+            className={cn(
+              "flex items-center justify-center rounded-md border-2 border-hairline transition-colors group-hover:bg-white/10",
+              boxClassName,
+            )}
+          >
+            <SearchIcon />
+          </span>
+        ) : (
+          <SearchIcon />
+        )}
       </button>
       {open && <LyricsSearchView onClose={() => setOpen(false)} />}
     </>

@@ -61,13 +61,20 @@ const CLOSE_BTN =
  * The two bottom-corner buttons: confirm-lyrics on the left, search-lyrics
  * on the right.
  *
- * 88px square — four times the area of the 44px they started at. Both act
- * on the LYRICS rather than on playback, which is why they live in the
- * corners rather than in the transport row: a corner is the easiest target
- * on a touch panel (two edges stop an over-shot finger), and it keeps them
- * clear of controls where a mis-tap costs something.
+ * The TARGET is 88px square — four times the area of the 44px box you
+ * actually see, which is drawn centred inside it (`CORNER_BOX`). Splitting
+ * the two is the point: these need to be hittable at a traffic light, but
+ * a pair of 88px slabs is a lot of furniture to park in the corners of a
+ * screen whose whole job is showing lyrics. The padding around each box is
+ * all target — the same trick the seek slider uses.
+ *
+ * Both act on the LYRICS rather than on playback, which is why they live
+ * in the corners rather than the transport row: a corner is the easiest
+ * place to hit without looking (two edges stop an over-shot finger) and it
+ * keeps them clear of controls where a mis-tap costs something.
  */
-const CORNER_BTN = "absolute bottom-2 z-20 size-[88px]";
+const CORNER_BTN = "absolute bottom-0 z-20 size-[88px]";
+const CORNER_BOX = "size-11";
 
 /**
  * Volume slider. Its own component so the volume subscription re-renders
@@ -366,11 +373,16 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
           chrome: they are the controls you reach for *because* of what is
           on screen. */}
       <ConfirmLyricsButton
-        className={cn(CORNER_BTN, "left-3")}
-        iconClassName="size-10"
+        className={cn(CORNER_BTN, "left-0")}
+        boxClassName={CORNER_BOX}
+        iconClassName="size-5"
       />
       <LyricsSearchButton
-        className={cn(CORNER_BTN, "right-3 flex items-center justify-center rounded-md border-2 border-hairline text-muted-foreground transition-colors hover:bg-white/10 hover:text-foreground disabled:pointer-events-none disabled:opacity-25 [&_svg]:size-10")}
+        className={cn(
+          CORNER_BTN,
+          "right-0 flex items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-25 [&_svg]:size-5",
+        )}
+        boxClassName={CORNER_BOX}
         onOpenChange={setSearchOpen}
         disabled={!hasTrack}
       />
