@@ -110,6 +110,114 @@ fn read_session(app: &AppHandle) -> Option<Session> {
     })
 }
 
+/// Origins whose cookies yt-dlp needs. YouTube's player auth reads the
+/// `.google.com` authority cookies as well as the `.youtube.com` ones, so
+/// exporting only one host produces a jar that looks signed in and isn't.
+const COOKIE_ORIGINS: [(&str, &str); 3] = [
+    ("https://music.youtube.com", ".youtube.com"),
+    ("https://www.youtube.com", ".youtube.com"),
+    ("https://www.google.com", ".google.com"),
+];
+
+/// Write the LIVE session to a Netscape `cookies.txt` for yt-dlp, and
+/// report whether it holds a usable session.
+///
+/// ## Why it reads the runtime jar rather than WebKit's own file
+///
+/// WebKitGTK persists a cookie file next to this app's data, and pointing
+/// yt-dlp at that file does NOT work: it is a stale, partial snapshot.
+/// Measured on the device, its last write was days old and held 11 cookies
+/// against the live jar's 40, and `curl -b <that file> youtube.com` came
+/// back `"LOGGED_IN":false` while the app itself was authenticated
+/// throughout. The runtime store — what `cookies_for_url` reads — is the
+/// only current copy. The exported file measures `LOGGED_IN":true`.
+///
+/// ## On writing a session to disk
+///
+/// The module docs above say nothing is persisted here, and this is the
+/// exception. The file is written 0600 into the app's own data directory,
+/// refreshed only when a Premium-gated download needs it, and is not a new
+/// class of exposure — WebKitGTK already keeps these same cookies in a
+/// plaintext file two directories up. But it IS this app writing one,
+/// which it previously never did.
+pub fn export_cookies_txt(app: &AppHandle, path: &std::path::Path) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+
+    let mut lines = vec!["# Netscape HTTP Cookie File".to_string()];
+    let mut seen: std::collections::HashSet<(String, String)> = Default::default();
+    let mut has_sid = false;
+    let mut has_apisid = false;
+
+    for (origin, fallback_domain) in COOKIE_ORIGINS {
+        let Some(cookies) = origin
+            .parse()
+            .ok()
+            .and_then(|url| window.cookies_for_url(url).ok())
+        else {
+            continue;
+        };
+        for cookie in cookies {
+            let name = cookie.name().to_string();
+            let domain = cookie
+                .domain()
+                .map(|d| {
+                    // Netscape's leading dot is what marks "and subdomains".
+                    if d.starts_with('.') { d.to_string() } else { format!(".{d}") }
+                })
+                .unwrap_or_else(|| fallback_domain.to_string());
+            // The same cookie is visible from several origins; write once.
+            if !seen.insert((domain.clone(), name.clone())) {
+                continue;
+            }
+            match name.as_str() {
+                "SID" | "__Secure-3PSID" | "__Secure-1PSID" => has_sid = true,
+                "SAPISID" | "__Secure-3PAPISID" => has_apisid = true,
+                _ => {}
+            }
+            // Expiry is written far-future rather than copied. This column
+            // only tells yt-dlp whether to SEND the cookie; validity is
+            // YouTube's call either way, and the file is regenerated from
+            // the live jar before it is used.
+            lines.push(format!(
+                "{domain}\tTRUE\t{}\t{}\t2147483647\t{name}\t{}",
+                cookie.path().unwrap_or("/"),
+                if cookie.secure().unwrap_or(false) { "TRUE" } else { "FALSE" },
+                cookie.value(),
+            ));
+        }
+    }
+
+    // Signed out, an exported jar is worse than none: it would hand yt-dlp
+    // a visitor session and change nothing except the failure mode.
+    if !(has_sid && has_apisid) {
+        let _ = std::fs::remove_file(path);
+        return false;
+    }
+
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::write(path, lines.join("\n") + "\n").is_err() {
+        return false;
+    }
+    restrict_permissions(path);
+    true
+}
+
+/// Owner-only. A session cookie file readable by other users on the box
+/// would be a real handover of the account.
+fn restrict_permissions(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 fn emit_session(app: &AppHandle, session: Option<Session>) {
     let event = match session {
         Some(s) => AppEvent::AuthState {

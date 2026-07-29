@@ -73,25 +73,66 @@ struct DownloadFailure {
     kind: FailureKind,
     /// yt-dlp's own last error line, for the journal.
     detail: String,
+    /// Refused specifically as Premium-only. Permanent for an anonymous
+    /// client, but the one failure a signed-in retry can actually fix —
+    /// so it is tracked separately from `kind` rather than folded into it.
+    premium_gated: bool,
 }
 
-/// Player-client sets to try, in order.
+/// One download attempt's configuration.
+struct Attempt {
+    /// `--extractor-args` value.
+    args: &'static str,
+    /// Whether to attach the signed-in session.
+    ///
+    /// This is the field that has to stay honest. Attaching cookies is NOT
+    /// free: measured on the device, an authenticated request returns only
+    /// storyboards — no audio at all — on every client, because YouTube
+    /// expects a PO Token once it knows who you are. Anonymous requests
+    /// via `android_vr` are exempt, which is exactly why the app works.
+    /// So cookies are a LAST resort for tracks that are refused outright,
+    /// never a default, and never applied to a track that would otherwise
+    /// have played.
+    cookies: bool,
+}
+
+/// What to try, in order.
 ///
-/// A 403 on the media URL usually means the client that did the extraction
-/// and the one fetching the bytes disagree about the token, so the useful
-/// retry is not "the same request again" but "extract it a different way".
-/// These three sets fail independently in practice, which is what makes
-/// walking them worth more than three attempts at the first one.
-const PLAYER_CLIENTS: [&str; 3] = [
-    "youtube:player_client=tv,android_vr",
-    "youtube:player_client=web_safari,mweb",
-    "youtube:player_client=ios,tv_embedded",
+/// Tiers 1-3 are anonymous and unchanged: a 403 on the media URL usually
+/// means the client that did the extraction and the one fetching the bytes
+/// disagree about the token, so the useful retry is "extract it a different
+/// way". These fail independently in practice.
+///
+/// Tier 4 is the Premium tier and is only ever reached for a track that has
+/// been refused as Premium-only. It pairs the signed-in session with
+/// `web_music` and relies on a PO Token provider being reachable — see
+/// `PREMIUM_TIER` below and the README.
+const ATTEMPTS: [Attempt; 4] = [
+    Attempt { args: "youtube:player_client=tv,android_vr", cookies: false },
+    Attempt { args: "youtube:player_client=web_safari,mweb", cookies: false },
+    Attempt { args: "youtube:player_client=ios,tv_embedded", cookies: false },
+    // `web_music` is the client whose GVS PO Token unlocks Music Premium
+    // formats (yt-dlp#13835 demonstrates premium-only format 774 arriving
+    // with exactly this pairing and being skipped without it).
+    Attempt { args: "youtube:player_client=web_music", cookies: true },
 ];
+
+/// Index of the Premium tier in `ATTEMPTS`. Skipped entirely unless the
+/// failure so far was specifically a Premium refusal.
+const PREMIUM_TIER: usize = 3;
 
 /// Gap between attempts. Short — this is a user waiting on a track, not a
 /// background job — but non-zero, because an immediate retry against a
 /// rate-limiter is just a second rejection.
 const RETRY_BACKOFF: Duration = Duration::from_millis(750);
+
+/// Was this specifically the Premium gate? Kept beside `classify` so the
+/// needle is written in one place only.
+const PREMIUM_NEEDLE: &str = "only available to music premium";
+
+fn is_premium_gated(stderr: &str) -> bool {
+    stderr.to_ascii_lowercase().contains(PREMIUM_NEEDLE)
+}
 
 /// Map yt-dlp's stderr to a failure kind.
 ///
@@ -106,7 +147,7 @@ fn classify(stderr: &str) -> FailureKind {
     const PERMANENT: [(&str, &str); 8] = [
         ("drm protected", "This track is DRM protected."),
         (
-            "only available to music premium",
+            PREMIUM_NEEDLE,
             "This track needs a YouTube Music Premium subscription.",
         ),
         ("private video", "This track is private."),
@@ -277,18 +318,42 @@ fn spawn_downloader(
         // to be permanent. Each attempt starts its `.part` from scratch —
         // nothing serves partial data (the HTTP handler waits for
         // `complete` before touching the file), so truncating is safe.
+        let cookies_path = srv.cache_dir.join("yt-dlp-cookies.txt");
         let mut success = false;
         let mut last: Option<DownloadFailure> = None;
-        for (attempt, clients) in PLAYER_CLIENTS.iter().enumerate() {
+        for (attempt, cfg) in ATTEMPTS.iter().enumerate() {
+            // The Premium tier is opt-in per track, not part of the walk.
+            // Reaching it on an ordinary failure would attach cookies to a
+            // track that never needed them — and an authenticated request
+            // returns no audio formats at all without a PO Token, so that
+            // would turn a retryable failure into a guaranteed one. Only a
+            // track YouTube has explicitly refused as Premium-only is
+            // worth spending it on.
+            if attempt == PREMIUM_TIER && !last.as_ref().is_some_and(|f| f.premium_gated) {
+                break;
+            }
+
+            let cookies = if cfg.cookies {
+                if !crate::subsystems::auth::export_cookies_txt(&app, &cookies_path) {
+                    eprintln!("[stream] {video_id}: Premium-only, but no signed-in session");
+                    break;
+                }
+                eprintln!("[stream] {video_id}: retrying as Premium (signed in + PO token)");
+                Some(cookies_path.as_path())
+            } else {
+                None
+            };
+
             if attempt > 0 {
                 eprintln!(
-                    "[stream] {video_id}: retry {}/{} with {clients}",
+                    "[stream] {video_id}: attempt {}/{} with {}",
                     attempt + 1,
-                    PLAYER_CLIENTS.len()
+                    ATTEMPTS.len(),
+                    cfg.args
                 );
                 tokio::time::sleep(RETRY_BACKOFF).await;
             }
-            match try_download(&video_id, &part_path, &ytdlp_bin, clients, &state).await {
+            match try_download(&video_id, &part_path, &ytdlp_bin, cfg.args, cookies, &state).await {
                 Ok(bytes) => {
                     if let Err(e) = tokio::fs::rename(&part_path, &final_path).await {
                         eprintln!("[stream] rename: {e}");
@@ -302,15 +367,23 @@ fn spawn_downloader(
                 Err(f) => {
                     let _ = tokio::fs::remove_file(&part_path).await;
                     eprintln!("[stream] download failed {video_id}: {}", f.detail);
-                    let permanent = matches!(f.kind, FailureKind::Permanent(_));
+                    // A Premium refusal is "permanent" for the anonymous
+                    // clients but is exactly what the Premium tier exists
+                    // for, so it must not end the walk before reaching it.
+                    let stop = matches!(f.kind, FailureKind::Permanent(_))
+                        && !(f.premium_gated && attempt < PREMIUM_TIER);
                     last = Some(f);
-                    if permanent {
+                    if stop {
                         eprintln!("[stream] {video_id}: permanent — not retrying");
                         break;
                     }
                 }
             }
         }
+        // The session file has done its job; it holds a live Google master
+        // session and there is no reason to leave it sitting on disk
+        // between plays.
+        let _ = tokio::fs::remove_file(&cookies_path).await;
 
         // Tell the UI what happened, in words it can show. A permanent
         // failure gets its own sentence; a transient one that survived
@@ -318,9 +391,11 @@ fn spawn_downloader(
         if !success {
             let message = match last.as_ref().map(|f| &f.kind) {
                 Some(FailureKind::Permanent(m)) => (*m).to_string(),
+                // Counts the anonymous tiers only: the Premium tier is not
+                // part of every track's journey, so including it would
+                // overstate what was tried for an ordinary failure.
                 _ => format!(
-                    "Couldn't download this track after {} attempts. Tap play to try again.",
-                    PLAYER_CLIENTS.len()
+                    "Couldn't download this track after {PREMIUM_TIER} attempts. Tap play to try again."
                 ),
             };
             emit(
@@ -365,12 +440,52 @@ async fn try_download(
     part_path: &std::path::Path,
     ytdlp_bin: &std::path::Path,
     extractor_args: &str,
+    cookies: Option<&std::path::Path>,
     state: &Arc<DownloadState>,
 ) -> Result<u64, DownloadFailure> {
     let url = format!("https://www.youtube.com/watch?v={video_id}");
     let _ = tokio::fs::remove_file(part_path).await; // clean stale
 
     let mut cmd = TokioCommand::new(ytdlp::program(ytdlp_bin));
+
+    // Put a JavaScript runtime on the child's PATH.
+    //
+    // This is the piece that actually unlocks Premium, and it is not
+    // obvious. The `web_music` client's media URLs are protected by
+    // YouTube's signature and `n` challenges, which yt-dlp can only solve
+    // by *executing JavaScript*. With no runtime it logs
+    //
+    //   WARNING: Signature solving failed: Some formats may be missing
+    //   WARNING: Only images are available for download
+    //
+    // and returns storyboards — which looks exactly like an auth failure
+    // and is not one. `android_vr`/`tv` need no signature solving, which
+    // is precisely why the anonymous path works without any of this.
+    //
+    // PATH rather than `--js-runtimes` so the same environment also serves
+    // the PO Token provider's script mode. A systemd user service inherits
+    // a minimal PATH that contains none of these locations.
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        let mut paths: Vec<std::path::PathBuf> = vec![
+            home.join(".deno/bin"),
+            home.join(".bun/bin"),
+            std::path::PathBuf::from("/usr/local/bin"),
+        ];
+        if let Some(existing) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&existing));
+        }
+        if let Ok(joined) = std::env::join_paths(paths) {
+            cmd.env("PATH", joined);
+        }
+    }
+
+    // The signed-in session, on the Premium tier only. Attaching it to an
+    // ordinary download makes YouTube demand a PO Token and return no
+    // audio at all — see `Attempt::cookies`.
+    if let Some(path) = cookies {
+        cmd.arg("--cookies").arg(path);
+    }
     cmd.args([
         "-f",
         "bestaudio[ext=webm]/bestaudio",
@@ -406,6 +521,7 @@ async fn try_download(
             return Err(DownloadFailure {
                 kind: FailureKind::Transient,
                 detail: format!("spawn failed: {e}"),
+                premium_gated: false,
             })
         }
     };
@@ -481,6 +597,7 @@ async fn try_download(
         return Err(DownloadFailure {
             kind: classify(&stderr),
             detail: last_error_line(&stderr),
+            premium_gated: is_premium_gated(&stderr),
         });
     }
 
@@ -498,6 +615,7 @@ async fn try_download(
             // worth another client rather than being called final.
             kind: classify(&stderr),
             detail: format!("only {size} bytes (min {MIN_AUDIO_BYTES})"),
+            premium_gated: is_premium_gated(&stderr),
         });
     }
     Ok(size)

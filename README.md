@@ -134,6 +134,82 @@ journalctl _SYSTEMD_USER_UNIT=kodama-lite.service -n 50 -f
 (Add yourself to the `systemd-journal` group — `sudo usermod -aG systemd-journal $USER`
 — or prefix with `sudo`.)
 
+### Let it play YouTube Music Premium tracks (optional)
+
+Some tracks are Premium-only and are refused outright:
+`This video is only available to Music Premium members`. The app plays
+everything else by asking YouTube **anonymously** — that path needs no account,
+no tokens and no extra software, and it is the one used for every ordinary
+track. Premium-only tracks are the exception, and unlocking them needs three
+things on the device.
+
+**None of this is required.** Without it the app works exactly as before and
+simply reports Premium tracks as unplayable.
+
+```bash
+# 1. A JavaScript runtime. This is the piece people miss: YouTube protects
+#    the signed-in client's media URLs with signature/"n" challenges that
+#    yt-dlp can only solve by executing JavaScript. Without it you get
+#    "Only images are available for download", which looks like an auth
+#    failure and is not one.
+curl -fsSL https://deno.land/install.sh | DENO_INSTALL=$HOME/.deno sh -s -- -y
+
+# 2. A PO Token provider (maintained by a yt-dlp maintainer).
+git clone --single-branch --branch 1.3.1 \
+    https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git ~/bgutil-ytdlp-pot-provider
+cd ~/bgutil-ytdlp-pot-provider/server && npm ci && npx tsc
+
+# 3. The matching yt-dlp plugin. NOTE the extra directory level — yt-dlp
+#    wants  plugins/<anything>/yt_dlp_plugins/…  and silently loads nothing
+#    ("Plugin directories: none") if you unzip one level too shallow.
+mkdir -p ~/.config/yt-dlp/plugins/bgutil
+curl -sL -o /tmp/pot.zip https://github.com/Brainicism/bgutil-ytdlp-pot-provider/releases/download/1.3.1/bgutil-ytdlp-pot-provider.zip
+unzip -q -o /tmp/pot.zip -d ~/.config/yt-dlp/plugins/bgutil/
+```
+
+Then run the provider as a user service so it comes back after a reboot:
+
+```bash
+cat > ~/.config/systemd/user/kodama-pot.service <<'EOF'
+[Unit]
+Description=PO Token provider for Kodama-Lite (bgutil)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node %h/bgutil-ytdlp-pot-provider/server/build/main.js
+Restart=on-failure
+RestartSec=5
+Environment=PATH=%h/.deno/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload && systemctl --user enable --now kodama-pot
+curl -s http://127.0.0.1:4416/ping     # {"server_uptime":…}
+```
+
+You must also be **signed in** in the app (Settings → Account). The app exports
+the live session to a `0600` `cookies.txt` only when a Premium-gated track is
+retried, and deletes it immediately afterwards.
+
+How it behaves: an ordinary track is fetched anonymously as before and never
+touches any of this. Only a track YouTube has explicitly refused as Premium-only
+is retried with the session + `web_music` + a PO token. That ordering is
+deliberate — attaching an account to an ordinary request makes YouTube demand a
+PO Token and return *no audio at all*, so a signed-in-by-default design breaks
+every track it touches.
+
+Check it worked in the journal:
+
+```
+[stream] <id>: retrying as Premium (signed in + PO token)
+[youtube] [pot:bgutil:http] Generating a gvs PO Token for web_music client
+[youtube] [jsc:deno] Solving JS challenges using deno
+[info] <id>: Downloading 1 format(s): 774        ← the Premium-only format
+```
+
 ### Let it read a USB drive (for Library → Local)
 
 The Local tab plays music off a USB stick. On a desktop the file manager's
@@ -205,6 +281,11 @@ Restart it afterwards with `systemctl --user restart kodama-lite`.
 - **The car shows no track info** — check the log for
   `[media] no OS media controls`. That means no session D-Bus was available, which
   happens when the app is launched over SSH rather than from the desktop.
+- **"This track needs a YouTube Music Premium subscription"** — it is Premium-only
+  and the app asked anonymously. See "Let it play YouTube Music Premium tracks"
+  above; the usual cause of it still failing after that setup is a missing
+  JavaScript runtime (`[jsc]` warnings about signature solving in the journal),
+  not a missing token.
 - **A track won't play** — the player bar now says *why*, not just that it didn't.
   A download is retried against three different YouTube player clients before
   giving up, which clears the common `HTTP 403` token desync; "tap play to try
