@@ -58,6 +58,18 @@ const CLOSE_BTN =
   "absolute right-0 top-0 z-20 flex h-[60px] w-40 items-center justify-end rounded-bl-md pr-6 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
 
 /**
+ * The two bottom-corner buttons: confirm-lyrics on the left, search-lyrics
+ * on the right.
+ *
+ * 88px square — four times the area of the 44px they started at. Both act
+ * on the LYRICS rather than on playback, which is why they live in the
+ * corners rather than in the transport row: a corner is the easiest target
+ * on a touch panel (two edges stop an over-shot finger), and it keeps them
+ * clear of controls where a mis-tap costs something.
+ */
+const CORNER_BTN = "absolute bottom-2 z-20 size-[88px]";
+
+/**
  * Volume slider. Its own component so the volume subscription re-renders
  * this alone rather than the whole stage (the same reason `AudioEngine` is
  * split out of `AppShell`).
@@ -328,16 +340,10 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="absolute inset-y-0 right-6 flex items-center gap-[clamp(0.25rem,1vw,0.75rem)]">
-          {/* Search sits to the LEFT of the source mic: it is the more
-              drastic of the two — "none of these are right, go and ask
-              again" — and reading left to right you reach the cheap fix
-              before the expensive one. */}
-          <LyricsSearchButton
-            className={SECONDARY_BTN}
-            onOpenChange={setSearchOpen}
-            disabled={!hasTrack}
-          />
+        {/* Pulled in from `right-6` to leave the bottom-right corner free
+            for the search button below — otherwise the volume slider runs
+            straight through it. */}
+        <div className="absolute inset-y-0 right-[7rem] flex items-center gap-[clamp(0.25rem,1vw,0.75rem)]">
           <LyricsSourceButton
             className={SECONDARY_BTN}
             placement="screen-right"
@@ -350,13 +356,24 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      {/* The green confirm button, lower-left, on the progress line's own
-          row. The stage is where lyrics are actually READ, so this is
-          where the answer to "are these right?" is known — putting it only
-          on the player bar would mean leaving the screen to say yes.
-          Always visible (not tied to the tap-to-reveal chrome): it is the
-          one control here you reach for *because* of what is on screen. */}
-      <ConfirmLyricsButton className="absolute bottom-2 left-3 z-20 size-11" />
+      {/* The two lyric controls, one in each bottom corner. The stage is
+          where lyrics are actually READ, so this is where "are these
+          right?" gets answered — and where "none of these are, go and ask
+          again" gets asked. Putting either only on the player bar would
+          mean leaving the screen to use it.
+
+          Both are always visible rather than tied to the tap-to-reveal
+          chrome: they are the controls you reach for *because* of what is
+          on screen. */}
+      <ConfirmLyricsButton
+        className={cn(CORNER_BTN, "left-3")}
+        iconClassName="size-10"
+      />
+      <LyricsSearchButton
+        className={cn(CORNER_BTN, "right-3 flex items-center justify-center rounded-md border-2 border-hairline text-muted-foreground transition-colors hover:bg-white/10 hover:text-foreground disabled:pointer-events-none disabled:opacity-25 [&_svg]:size-10")}
+        onOpenChange={setSearchOpen}
+        disabled={!hasTrack}
+      />
 
       <div
         aria-hidden

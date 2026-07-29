@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -87,6 +87,24 @@ export function LyricsSearchView({ onClose }: { onClose: () => void }) {
   // instant. They are cleared when the TRACK changes (see `load`), which
   // is when they actually stop being about the right song.
   const close = useCallback(() => onClose(), [onClose]);
+
+  /**
+   * Leave when the track does.
+   *
+   * A song ending while this is open leaves the user editing a query for a
+   * song that stopped playing, over a keyboard whose results the store has
+   * already discarded — and every lyric they could pick would be applied
+   * to whatever is playing NOW. Dropping back to the karaoke stage is both
+   * the safe outcome and the one they'd have chosen: the reason to be here
+   * was the song they were listening to.
+   *
+   * Keyed on the videoId captured at mount rather than on a change event,
+   * so it survives re-renders and fires exactly once, on the transition.
+   */
+  const openedForRef = useRef(track?.videoId);
+  useEffect(() => {
+    if (track?.videoId !== openedForRef.current) close();
+  }, [track?.videoId, close]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
