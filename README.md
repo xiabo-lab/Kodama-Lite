@@ -13,18 +13,56 @@ See **[DESIGN.md](./DESIGN.md)** for the full architecture proposal.
 *Home, captured from the device. Page headings are gone and the cards are sized so a
 whole row of artwork clears the fold — on a 238px content area that's the difference
 between seeing a row and seeing the top third of one. The player bar gives the track a
-quarter of its width and spreads the controls across the rest.*
+quarter of its width and spreads the controls across the rest. Along the bottom: the
+green **confirm-lyrics** button (left), then a seek bar with a real draggable thumb —
+its 36px touch band is three times the visible line, because a 6px strip is not
+something you hit at a traffic light.*
+
+![The full-screen karaoke stage](./docs/screenshot-karaoke.png)
+
+*The karaoke stage (`L`, or the top-right corner), captured mid-line. Three **fixed**
+slots — previous, current, next — with the current line centred and never moving; an
+earlier version scrolled a full list, which meant the line you were reading was in
+motion for most of its own airtime. The sung/unsung edge sweeps continuously and
+interpolates* inside *the word being sung, which is what makes it read as singing
+rather than as words switching colour. Right cluster: search lyrics, lyrics source,
+queue, volume. Closing is the same corner that opened it.*
 
 ![The Library, sub-nav down the left](./docs/screenshot-library.png)
 
 *Library. Sub-navigation runs down the left rather than across the top: there are 1712
-spare horizontal pixels and almost no vertical ones. Explore works the same way.*
+spare horizontal pixels and almost no vertical ones. Explore works the same way. The
+strip now carries a fifth tab — **Local**, for music on a USB stick — and its spacing
+was tightened so all five clear the fold without scrolling. (This capture predates the
+Local tab; the rest of the screen is unchanged.)*
 
-![The full-screen karaoke stage](./docs/screenshot-karaoke.png)
+## The interface
 
-*The karaoke stage (`L`, or the expand button). Three big lines, scroll-synced, with a
-±3s offset in Settings for Bluetooth latency to the car speakers. Lyrics come from
-seven providers searched in tiers — usually one request, not seven.*
+Everything is built for one screen: a **1920x440** touch panel in a car, roughly 238px
+of content once the top bar and player bar have taken their share. That constraint,
+not taste, explains most of the layout decisions.
+
+- **Home / Explore / Search** — horizontally scrolling shelves, sized so a full row of
+  artwork clears the fold.
+- **Library** — Playlists, Songs, Albums, Artists, and **Local**. Local scans a USB
+  drive for MP3s and lists song, artist and length, with in-order / shuffle / repeat.
+  It needs no account and no internet, so it keeps working when nothing else does.
+- **The player bar** — cover and title on the left quarter, transport spread across
+  the middle, then queue and volume. The bottom row is the seek bar, with the green
+  lyrics-confirm button at its left end.
+- **The karaoke stage** — `L`, or the top-right corner. Three fixed lyric slots with a
+  sweeping karaoke fill; tap anywhere to reveal the track name for a few seconds.
+- **Search Lyrics** — its own icon beside the lyrics-source picker. Artist and song
+  fields down the left, an on-screen keyboard (with Pinyin) on the right, and results
+  from six providers boxed **green for word-synced** and **yellow for line-synced**.
+  Every field is tap-to-position with a real caret, because correcting one wrong word
+  should not mean retyping the rest.
+- **Nothing is cached until you say so.** Lyrics found automatically are shown but not
+  saved; the green button is what commits them for next time. A wrong match therefore
+  can't become permanent — which it used to, silently.
+
+There is an on-screen keyboard throughout because WebKitGTK raises none of its own,
+and a pointer is not something a driver has.
 
 ## Install on a Raspberry Pi
 
@@ -384,15 +422,20 @@ What's real:
   hero) / `Playlist` / `Album` / `Artist`, all cache-first and non-blocking on
   failure (an error card + Retry, never a frozen spinner or a blank screen).
 - Lyrics: all 7 of YTMLite's sources (YouTube Music, LRCLIB, Kugou, NetEase,
-  Musixmatch, QQ Music, Genius — `src/lib/lyrics/`), same auto-pick preference order
-  and "timed beats plain" rule as YTMLite, plus a manual source picker (the mic
-  button in both bars). All 7 are fetched in parallel for every track anyway, so
-  `lyrics:loaded` ships the whole per-source map and switching is a local `set()`
-  with no refetch; each row shows whether that provider has synced, plain or no
-  lyrics for this track, and the choice persists across tracks and restarts, falling
-  back to auto whenever the pinned source has nothing. The karaoke stage scrolls and
-  highlights the active line with the same easing/timing engine as YTMLite, opened
-  via the player bar's full-screen button or the `L` shortcut.
+  Musixmatch, QQ Music, Genius — `src/lib/lyrics/`), plus a manual source picker (the
+  mic button in both bars) and a hand-typed **Search Lyrics** screen over the six
+  that can be searched by name.
+
+  **Superseded since:** matching no longer works the way YTMLite's does. Each source
+  used to return its *first* search hit filtered by a boolean plausibility test, which
+  cannot tell the right song from a Live version or a cover — search engines rank by
+  popularity, not by what is playing. Every candidate from every source is now
+  *scored* (`src/lib/lyrics/score.ts`, ported from the Carlyrics project) and the
+  tiered walk falls through when the best score is under 50%. The karaoke stage no
+  longer scrolls either: it draws three fixed slots with a continuous karaoke sweep
+  (see the screenshot caption above). And nothing is written to the lyrics cache until
+  the green confirm button is pressed — auto-caching made a wrong match permanent,
+  because a cache hit skips the search that would have corrected it.
 - A queue panel (now playing / up next, jump-to, remove), anchored to the player bar
   and to the karaoke stage's own right-hand cluster (lyrics source / queue / volume).
 - **Accounts/sign-in.** `subsystems/auth.rs` opens a Google login webview and reads
