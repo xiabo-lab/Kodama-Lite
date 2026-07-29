@@ -30,11 +30,13 @@ queue, volume. Closing is the same corner that opened it.*
 
 ![The Library, sub-nav down the left](./docs/screenshot-library.png)
 
-*Library. Sub-navigation runs down the left rather than across the top: there are 1712
-spare horizontal pixels and almost no vertical ones. Explore works the same way. The
-strip now carries a fifth tab — **Local**, for music on a USB stick — and its spacing
-was tightened so all five clear the fold without scrolling. (This capture predates the
-Local tab; the rest of the screen is unchanged.)*
+*Library, on the **Local** tab. Sub-navigation runs down the left rather than across
+the top: there are 1712 spare horizontal pixels and almost no vertical ones, and the
+five tabs are spaced to clear the fold without scrolling. Local lists what is on the
+USB stick — song, artist, length — with in-order / shuffle / repeat and a rescan. Note
+"7 tracks": the drive holds eight files named `.mp3`, but one of them is actually WMA,
+which WebKit cannot decode. The scan checks the codec rather than the extension, so it
+never offers a track that would fail on tap.*
 
 ## The interface
 
