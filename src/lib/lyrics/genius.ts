@@ -1,6 +1,8 @@
 // Ported verbatim from YTMLite (only the fetch import source changed).
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type { Lyrics } from "@/lib/lyrics/types";
+import type { LyricsCandidate } from "@/lib/lyrics/score";
+import { resolveCandidates, type SearchHit } from "@/lib/lyrics/candidates";
 import { hitMatches, normalizeForMatch } from "@/lib/lyrics/match";
 
 /**
@@ -57,6 +59,63 @@ export async function fetchGeniusLyrics(
   if (!text) return null;
 
   return { kind: "plain", text, source: "Genius" };
+}
+
+/**
+ * Genius hits for a query, with their scraped lyrics, as candidates.
+ *
+ * Every candidate costs a full song-page fetch and scrape, which is by far
+ * the heaviest per-hit cost of any source — so callers should ask for few.
+ * Genius is also plain-text only, so nothing it returns can ever win on
+ * sync level; it is here to cover the western catalogue that has no synced
+ * lyric anywhere, which is exactly the case where a plain transcript with
+ * estimated timings beats an empty stage.
+ */
+export async function searchGeniusCandidates(
+  p: GeniusParams,
+  limit: number,
+): Promise<LyricsCandidate[]> {
+  const hits = await searchSongs(p, limit);
+  return resolveCandidates("genius", hits, lyricsForUrl, limit);
+}
+
+async function lyricsForUrl(url: string): Promise<Lyrics | null> {
+  const text = await scrapeLyrics(url);
+  return text ? { kind: "plain", text, source: "Genius" } : null;
+}
+
+async function searchSongs(
+  p: GeniusParams,
+  limit: number,
+): Promise<SearchHit<string>[]> {
+  if (!p.title) return [];
+  const q = p.artist ? `${p.title} ${p.artist}` : p.title;
+  const url = new URL(SEARCH_URL);
+  url.searchParams.set("q", q);
+
+  try {
+    const r = await tauriFetch(url.toString(), {
+      method: "GET",
+      headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+    });
+    if (!r.ok) return [];
+    const json = (await r.json()) as GeniusSearchResponse;
+    return (json?.response?.hits ?? [])
+      .filter(
+        (h) =>
+          h.type === "song" &&
+          h.result?.url &&
+          h.result?.lyrics_state !== "unreleased",
+      )
+      .slice(0, Math.max(limit, 1))
+      .map((h) => ({
+        key: h.result!.url!,
+        title: h.result?.title ?? "",
+        artist: h.result?.primary_artist?.name ?? "",
+      }));
+  } catch {
+    return [];
+  }
 }
 
 async function findSongUrl(p: GeniusParams): Promise<string | null> {

@@ -1,6 +1,8 @@
 // Ported verbatim from YTMLite (only the fetch import source changed).
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type { Lyrics } from "@/lib/lyrics/types";
+import type { LyricsCandidate } from "@/lib/lyrics/score";
+import { resolveCandidates, type SearchHit } from "@/lib/lyrics/candidates";
 import { parseLRC } from "@/lib/lyrics/parse-lrc";
 
 /**
@@ -153,6 +155,103 @@ export async function fetchMusixmatchLyrics(
     result = await tryFetch(p);
   }
   return result === "auth-failure" ? null : result;
+}
+
+/**
+ * Musixmatch hits for a query, with lyrics, as scoreable candidates.
+ *
+ * Shares the two-pass token handling with `fetchMusixmatchLyrics`: a
+ * flagged or expired `usertoken` is rejected at the search step, so the
+ * whole sweep is retried once against a fresh one before giving up.
+ */
+export async function searchMusixmatchCandidates(
+  p: MusixmatchParams,
+  limit: number,
+): Promise<LyricsCandidate[]> {
+  if (!p.title) return [];
+  let out = await trySearch(p, limit);
+  if (out === "auth-failure") {
+    invalidateToken();
+    out = await trySearch(p, limit);
+  }
+  return out === "auth-failure" ? [] : out;
+}
+
+async function trySearch(
+  p: MusixmatchParams,
+  limit: number,
+): Promise<LyricsCandidate[] | "auth-failure"> {
+  const token = await fetchToken();
+  if (!token) return [];
+  const hits = await searchTracks(p, token, limit);
+  if (hits === "auth-failure") return "auth-failure";
+  return resolveCandidates("musixmatch", hits, (id) => lyricsFor(id, token), limit);
+}
+
+/** One track's best available lyric: synced subtitle if it has one, else
+ *  the plain body. `auth-failure` is swallowed to null here — the retry is
+ *  driven by the search step, which fails first and fails for the whole
+ *  sweep rather than for one track. */
+async function lyricsFor(
+  trackId: number,
+  token: string,
+): Promise<Lyrics | null> {
+  const subtitle = await getSubtitle(trackId, token);
+  if (subtitle && subtitle !== "auth-failure") {
+    const lines = parseLRC(subtitle);
+    if (lines.length > 0) {
+      return { kind: "timed", lines, source: "Musixmatch" };
+    }
+  }
+  const plain = await getPlainLyrics(trackId, token);
+  if (plain && plain !== "auth-failure") {
+    return { kind: "plain", text: plain, source: "Musixmatch" };
+  }
+  return null;
+}
+
+async function searchTracks(
+  p: MusixmatchParams,
+  token: string,
+  limit: number,
+): Promise<SearchHit<number>[] | "auth-failure"> {
+  const url = new URL(`${API_BASE}/track.search`);
+  url.searchParams.set("q_track", p.title);
+  if (p.artist) url.searchParams.set("q_artist", p.artist);
+  url.searchParams.set("page_size", String(Math.max(limit, 1)));
+  url.searchParams.set("page", "1");
+  url.searchParams.set("s_track_rating", "desc");
+  url.searchParams.set("quorum_factor", "1.0");
+  url.searchParams.set("app_id", APP_ID);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("usertoken", token);
+
+  try {
+    const r = await tauriFetch(url.toString(), {
+      method: "GET",
+      headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+    });
+    if (r.status === 401 || r.status === 403) return "auth-failure";
+    if (!r.ok) return [];
+    const json = (await r.json()) as MxmEnvelope<MxmSearchBody>;
+    if (json?.message?.header?.status_code === 401) return "auth-failure";
+    return (json?.message?.body?.track_list ?? [])
+      .map((t) => t.track)
+      .filter(
+        (t): t is NonNullable<typeof t> & { track_id: number } =>
+          !!t && typeof t.track_id === "number",
+      )
+      // A track Musixmatch knows about but holds no lyrics for costs two
+      // wasted round trips and can only ever resolve to null.
+      .filter((t) => t.has_subtitles === 1 || t.has_lyrics === 1)
+      .map((t) => ({
+        key: t.track_id,
+        title: t.track_name ?? "",
+        artist: t.artist_name ?? "",
+      }));
+  } catch {
+    return [];
+  }
 }
 
 type TryFetchResult = Lyrics | null | "auth-failure";

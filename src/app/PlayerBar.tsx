@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useState } from "react";
 import {
   Loader2Icon,
   PauseIcon,
@@ -13,6 +13,7 @@ import { usePlaybackStore } from "@/store/playbackStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
 import { QueueButton, QueuePanel } from "@/components/layout/queue-panel";
 import { LikeButton } from "@/components/shared/like-button";
+import { ConfirmLyricsButton } from "@/components/shared/confirm-lyrics-button";
 import { cn } from "@/lib/utils";
 
 /**
@@ -54,13 +55,24 @@ export function PlayerBar() {
   const loading = status === "loading";
   const error = status === "error" ? playError : undefined;
 
-  const barRef = useRef<HTMLDivElement | null>(null);
-  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-    const el = barRef.current;
-    if (!el || duration <= 0) return;
-    const rect = el.getBoundingClientRect();
-    const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    seek(fraction * duration);
+  /**
+   * Where the thumb is being dragged to, or `null` when it isn't.
+   *
+   * The element is a controlled input whose value normally follows
+   * `position`, which the audio element pushes several times a second.
+   * Without this, every one of those updates would yank the thumb back
+   * out from under the finger holding it. While a drag is in progress the
+   * scrub value wins and the store is left alone; the seek is committed
+   * on release.
+   */
+  const [scrub, setScrub] = useState<number | null>(null);
+  const shownPosition = scrub ?? position;
+  const seekable = hasTrack && duration > 0;
+  const pct = duration > 0 ? Math.min(100, (shownPosition / duration) * 100) : 0;
+
+  const commitScrub = () => {
+    if (scrub !== null) seek(scrub);
+    setScrub(null);
   };
 
 
@@ -106,8 +118,17 @@ export function PlayerBar() {
                 Loading…
               </span>
             ) : error ? (
+              // The real reason, not "Couldn't play this track".
+              //
+              // The data plane now classifies yt-dlp's failure and sends a
+              // sentence worth reading — "needs a Premium subscription",
+              // "is DRM protected", "tap play to try again". Those are
+              // three completely different situations that this row used
+              // to render identically, leaving the only actionable
+              // difference (is it worth trying again?) invisible. The raw
+              // detail is still on the tooltip.
               <span className="truncate text-sm text-brand" title={error}>
-                Couldn't play this track
+                {error}
               </span>
             ) : (
               <span className="truncate text-sm text-muted-foreground">
@@ -206,22 +227,41 @@ export function PlayerBar() {
       </div>
 
       <div className="flex items-center gap-2">
+        {/* Lower-left corner of the screen, on the progress row. It acts on
+            the LYRICS rather than on playback, so it deliberately sits
+            outside the transport cluster above — down here it is the only
+            thing on its row that isn't a readout, and it can't be confused
+            with a transport control mid-drive. */}
+        <ConfirmLyricsButton className="size-7 shrink-0" />
         <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-          {formatTime(position)}
+          {formatTime(shownPosition)}
         </span>
-        <div
-          ref={barRef}
-          onClick={handleSeek}
-          className={cn(
-            "h-1.5 min-w-0 flex-1 rounded-full bg-white/20",
-            hasTrack && duration > 0 && "cursor-pointer",
-          )}
-        >
-          <div
-            className="h-full rounded-full bg-brand"
-            style={{ width: duration > 0 ? `${(position / duration) * 100}%` : "0%" }}
-          />
-        </div>
+        {/* `step={0.1}` rather than the default 1: at a whole second the
+            thumb visibly snaps between stops on a long track, which reads
+            as a laggy control rather than a precise one.
+
+            Both `onMouseUp` and `onTouchEnd` commit, because WebKitGTK on
+            the panel delivers one or the other depending on how the event
+            was synthesised, and a drag that never commits leaves the thumb
+            parked somewhere the audio never went. `onKeyUp` covers arrow
+            stepping, which produces neither. */}
+        <input
+          type="range"
+          min={0}
+          max={duration > 0 ? duration : 100}
+          step={0.1}
+          value={shownPosition}
+          disabled={!seekable}
+          aria-label="Seek"
+          aria-valuetext={`${formatTime(shownPosition)} of ${formatTime(duration)}`}
+          onChange={(e) => setScrub(Number(e.target.value))}
+          onMouseUp={commitScrub}
+          onTouchEnd={commitScrub}
+          onKeyUp={commitScrub}
+          // `--pct` drives the filled portion of the track; see index.css.
+          style={{ "--pct": `${pct}%` } as React.CSSProperties}
+          className="seek-slider -my-3 min-w-0 flex-1"
+        />
         <span className="w-10 shrink-0 text-xs tabular-nums text-muted-foreground">
           {formatTime(duration)}
         </span>

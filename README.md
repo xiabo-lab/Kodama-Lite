@@ -134,6 +134,53 @@ journalctl _SYSTEMD_USER_UNIT=kodama-lite.service -n 50 -f
 (Add yourself to the `systemd-journal` group — `sudo usermod -aG systemd-journal $USER`
 — or prefix with `sudo`.)
 
+### Let it read a USB drive (for Library → Local)
+
+The Local tab plays music off a USB stick. On a desktop the file manager's
+session agent mounts a stick when you plug it in; this app runs as a systemd
+*user* service with no file manager, so nothing does — a stick sits there as
+`/dev/sda1` with `/media` empty. udisks2 is running and would happily mount it,
+but it answers `NotAuthorizedCanObtain` because a headless service has no TTY to
+put an authentication prompt on.
+
+One polkit rule fixes it, scoped to removable devices only (replace `fuwenxu`
+with your username):
+
+```bash
+sudo tee /etc/polkit-1/rules.d/50-kodama-lite-udisks.rules > /dev/null <<'EOF'
+polkit.addRule(function(action, subject) {
+    if (subject.user !== "fuwenxu") return polkit.Result.NOT_HANDLED;
+    if (action.id !== "org.freedesktop.udisks2.filesystem-mount" &&
+        action.id !== "org.freedesktop.udisks2.filesystem-mount-system") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (action.lookup("drive.removable") === "true" ||
+        action.lookup("media.removable") === "true") {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});
+EOF
+sudo systemctl restart polkit
+```
+
+Without it the app falls back to `sudo -n mount` (read-only, under
+`/media/kodama-*`), which works only if you have passwordless sudo. With neither,
+the tab says so rather than failing silently.
+
+Like the service unit itself, this is **not** shipped by the .deb — it is host
+configuration, and a package has no business writing polkit rules.
+
+Two things worth knowing if a stick isn't detected:
+
+- **exFAT needs its kernel module**, which mounting triggers automatically.
+  `exfatprogs` must be installed (`sudo apt install exfatprogs`); it already is on
+  Raspberry Pi OS Trixie.
+- **The scan trusts `lsblk`'s `rm` flag and deliberately ignores `hotplug`.** On a
+  Pi the SD card the OS boots from reports `hotplug: true`, so honouring that flag
+  would send the scanner walking the root filesystem. `journalctl` shows both
+  values per device (`[local] sda rm=… hotplug=…`) if something is missing.
+
 ### Updating
 
 Repeat step 2 with the newer version number; `apt` upgrades in place and keeps your
@@ -158,9 +205,15 @@ Restart it afterwards with `systemctl --user restart kodama-lite`.
 - **The car shows no track info** — check the log for
   `[media] no OS media controls`. That means no session D-Bus was available, which
   happens when the app is launched over SSH rather than from the desktop.
-- **A track won't play** — the player bar says so rather than failing silently. The
+- **A track won't play** — the player bar now says *why*, not just that it didn't.
+  A download is retried against three different YouTube player clients before
+  giving up, which clears the common `HTTP 403` token desync; "tap play to try
+  again" means exactly that. Some tracks genuinely cannot play — DRM-protected and
+  Premium-only ones are named as such, and no amount of retrying changes them. The
   first play of any track has to fetch it, so give it a few seconds; it's cached
   afterwards and replays use no data.
+- **Library → Local is empty** — see "Let it read a USB drive" above; the usual
+  cause is the missing polkit rule rather than the drive.
 - **Intermittent audio, radio or SD-card trouble** — check `vcgencmd get_throttled`
   first. Anything other than `0x0` means the Pi has browned out at some point, and an
   under-powered supply produces exactly the kind of symptoms that look like software

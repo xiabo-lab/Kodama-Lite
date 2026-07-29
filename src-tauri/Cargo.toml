@@ -1,6 +1,6 @@
 [package]
 name = "kodama-lite"
-version = "0.1.23"
+version = "0.1.28"
 description = "Kodama-Lite — a fluid, decoupled YouTube Music client for the Raspberry Pi 5"
 authors = ["xiabo-lab"]
 license = "GPL-3.0-only"
@@ -32,9 +32,11 @@ tauri-plugin-single-instance = "2"
 # src/lib/network.ts — using this plugin's `fetch`, not a Rust reqwest
 # client. It's the same call the request needs either way (a plain
 # HTTPS POST/GET with a JSON body), and doing it in Rust would mean
-# reimplementing YTMLite's ~3,000 lines of proven response-parsing logic
-# uncompiled and unverified (there is no Rust toolchain in this dev
-# environment). The plugin still keeps the fetch off the render path —
+# reimplementing YTMLite's ~3,000 lines of proven response-parsing logic.
+# (The original rationale also cited "no Rust toolchain in this dev
+# environment" — that is no longer true, cargo builds here now, so the
+# reason this stays in TypeScript is the 3,000 lines, not the tooling.)
+# The plugin still keeps the fetch off the render path —
 # it's a real async network call, never awaited by a component — and
 # its reach is capability-scoped (capabilities/default.json), bypassing
 # the page CSP entirely rather than needing it loosened.

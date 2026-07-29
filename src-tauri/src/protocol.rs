@@ -69,6 +69,11 @@ pub enum Command {
     /// profile that has never set one. Read-only — see `subsystems::volume`.
     #[serde(rename = "volume:get")]
     VolumeGet,
+    /// Scan a removable drive for playable audio — the Library's Local
+    /// tab. Mounts the drive first if nothing else has; see
+    /// `subsystems::local` for why that is our job here.
+    #[serde(rename = "local:scan")]
+    LocalScan,
     /// Close the app — the Pi runs it full-screen with no desktop chrome,
     /// so the Settings screen's Quit row is the only way out.
     #[serde(rename = "app:quit")]
@@ -141,4 +146,22 @@ pub enum AppEvent {
         muted: bool,
         available: bool,
     },
+    /// A drive scan started.
+    #[serde(rename = "local:scanning")]
+    LocalScanning,
+    /// Tag-reading progress. A full stick is thousands of `ffprobe` spawns
+    /// and tens of seconds, which a bare spinner misrepresents as a hang.
+    #[serde(rename = "local:progress")]
+    LocalProgress { done: u64, total: u64 },
+    /// The finished library. `source` names the drive(s) it came from, so
+    /// the tab can say which stick it is showing.
+    #[serde(rename = "local:scanned")]
+    LocalScanned {
+        source: String,
+        tracks: Vec<crate::subsystems::local::LocalTrack>,
+    },
+    /// No drive, no music on it, or it couldn't be mounted — always with a
+    /// message that says which, because the three have different fixes.
+    #[serde(rename = "local:error")]
+    LocalError { message: String },
 }

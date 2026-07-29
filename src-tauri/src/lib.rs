@@ -59,6 +59,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .setup(|app| {
+            // Before playback: the stream server's `/local/:id` route and
+            // `stream:resolve` both look this index up, so it has to exist
+            // by the time either can be reached.
+            subsystems::local::init(app.handle());
             subsystems::playback::start(app.handle());
             // MPRIS must be created on the main thread — souvlaki's
             // MediaControls is neither Send nor Sync. `setup` is that

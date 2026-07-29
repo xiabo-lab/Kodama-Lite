@@ -76,6 +76,52 @@ export function createMockTransport(): Transport {
         case "stream:prefetch":
           // Silent, fire-and-forget — matches the real subsystem.
           break;
+        case "local:scan":
+          // A browser tab has no block devices, no udisks and no ffprobe,
+          // so this is the one command whose *result* has to be invented
+          // to be useful at all. It is faked rather than left silent
+          // because the alternative is a Local tab stuck on "Looking for a
+          // drive…" forever in dev — which looks exactly like the bug this
+          // feature is most likely to have on the device, and would train
+          // everyone to ignore it.
+          //
+          // The staged progress is not decoration: the real scan spawns an
+          // ffprobe per file and a full stick takes tens of seconds, so the
+          // progress path is load-bearing UI and needs to be exercisable.
+          setTimeout(() => emit({ type: "local:scanning" }), 40);
+          {
+            const mock = [
+              { id: "locmock00000001", title: "Blaze Away", artist: "TRAX", duration: 228.4 },
+              { id: "locmock00000002", title: "Forever Memories Remix", artist: "w-inds.", duration: 349.9 },
+              { id: "locmock00000003", title: "philosophy", artist: "w-inds.", duration: 180 },
+              { id: "locmock00000004", title: "无尽旋转", artist: "SNH48", duration: 279.1 },
+              { id: "locmock00000005", title: "Swear it All Over Again", artist: "WestLife", duration: 250.1 },
+              { id: "locmock00000006", title: "Because of you", artist: "w-inds.", duration: 203.6 },
+              { id: "locmock00000007", title: "How crazy", artist: "YUI", duration: 218.8 },
+              { id: "locmock00000008", title: "一念之间", artist: "陶喆", duration: 282.8 },
+            ];
+            mock.forEach((_, i) =>
+              setTimeout(
+                () =>
+                  emit({
+                    type: "local:progress",
+                    done: i + 1,
+                    total: mock.length,
+                  }),
+                120 + i * 60,
+              ),
+            );
+            setTimeout(
+              () =>
+                emit({
+                  type: "local:scanned",
+                  source: "USB3 (browser mock)",
+                  tracks: mock,
+                }),
+              120 + mock.length * 60,
+            );
+          }
+          break;
         case "ytdlp:check":
           setTimeout(() => emit({ type: "ytdlp:state", phase: "ready" }), 60);
           break;

@@ -63,12 +63,46 @@ const PAGER_BTN =
  *  physical IME numbers its candidates with. */
 const CANDIDATES_PER_PAGE = 9;
 
+/**
+ * Where edits land.
+ *
+ * The keyboard used to only ever append to and truncate the END of the
+ * string — `prev + ch` and `prev.slice(0, -1)`. Correcting "I Love You" to
+ * "You" therefore meant deleting seven correct characters to reach the
+ * wrong ones. A cursor makes the edit proportional to the mistake.
+ *
+ * The caller owns the cursor alongside the text, for the same reason it
+ * owns the text: the two have to move together, and a field that is tapped
+ * to reposition the caret is the caller's own UI.
+ */
+export type Caret = {
+  /** Index into the string, 0..length. */
+  pos: number;
+  /**
+   * Accepts an updater as well as a value, and the updater form is what
+   * the edit operations use.
+   *
+   * Two taps landing in the same render pass both read the same `pos`
+   * prop, so `set(pos + 1)` twice would advance the caret once while the
+   * text advanced twice — the caret and the string would desync exactly as
+   * far as the user typed fast. Relative updates (`set(p => p + 1)`)
+   * compose instead. This is the same hazard `onChange` documents for the
+   * text itself; the caret needed the same treatment and did not have it.
+   */
+  set: (next: number | ((prev: number) => number)) => void;
+};
+
 export function OnScreenKeyboard({
   value,
   onChange,
   onSubmit,
   onClose,
   placeholder,
+  embedded = false,
+  onComposingChange,
+  submitLabel = "Search",
+  caret,
+  showSubmitKey = true,
 }: {
   value: string;
   /** React-style updater, NOT a plain value. The keyboard must never
@@ -82,6 +116,39 @@ export function OnScreenKeyboard({
   onSubmit: () => void;
   onClose: () => void;
   placeholder?: string;
+  /**
+   * Render as a panel that fills its parent instead of as a full-screen
+   * overlay, and drop the built-in text field and Close button — the
+   * caller is showing its own.
+   *
+   * This is what lets the Search Lyrics screen put Artist/Song fields on
+   * the left and the keys on the right (Carlyrics' `_editor_layout`)
+   * while reusing this component's Pinyin IME rather than growing a
+   * second copy of it.
+   */
+  embedded?: boolean;
+  /** Un-converted Pinyin, surfaced so an embedded caller can render it in
+   *  whichever field is focused — the underline that says "these letters
+   *  aren't part of the text yet" has to appear where the text is. */
+  onComposingChange?: (composing: string) => void;
+  /** Label on the Enter key. "Search" reads wrong when the key commits a
+   *  field rather than running a query. */
+  submitLabel?: string;
+  /**
+   * Insertion point. When absent the keyboard behaves as it always did —
+   * append and truncate at the end — which is what the plain full-screen
+   * search wants, since it has no field to tap into.
+   */
+  caret?: Caret;
+  /**
+   * Whether to draw the Enter/Search key.
+   *
+   * The Search Lyrics screen already has a large Search button of its own
+   * in the left column, directly under the fields it acts on. A second one
+   * in the corner of the keyboard was the same action twice, and the
+   * keyboard's copy was the one more easily hit by accident mid-typing.
+   */
+  showSubmitKey?: boolean;
 }) {
   const [shift, setShift] = useState(false);
   const [symbols, setSymbols] = useState(false);
@@ -90,6 +157,10 @@ export function OnScreenKeyboard({
   const [composing, setComposing] = useState("");
   const [dict, setDict] = useState<Record<string, string> | null>(null);
   const [dictError, setDictError] = useState(false);
+
+  useEffect(() => {
+    onComposingChange?.(composing);
+  }, [composing, onComposingChange]);
 
   // Fetched only when Chinese is actually switched on — see lib/pinyin.ts
   // for why the dictionary isn't part of the bundle.
@@ -123,8 +194,35 @@ export function OnScreenKeyboard({
   const pageStart = shownPage * CANDIDATES_PER_PAGE;
   const pageCandidates = candidates.slice(pageStart, pageStart + CANDIDATES_PER_PAGE);
 
+  /**
+   * Insert `text` at the caret (or at the end when there is no caret) and
+   * leave the caret after what was inserted.
+   *
+   * The caret index is clamped against `prev` inside the updater rather
+   * than read from the `caret.pos` prop directly, for the same reason
+   * `onChange` takes an updater at all: two taps inside one render pass
+   * would both see the same stale value and the second would clobber the
+   * first.
+   */
+  const insert = (text: string) => {
+    if (!caret) {
+      onChange((prev) => prev + text);
+      return;
+    }
+    onChange((prev) => {
+      const i = Math.max(0, Math.min(caret.pos, prev.length));
+      return prev.slice(0, i) + text + prev.slice(i);
+    });
+    // Relative, NOT `caret.pos + text.length`. An earlier version computed
+    // the new index inside the `onChange` updater and read it out
+    // afterwards — but React defers updaters, so the value read was always
+    // the initial one. The caret jumped to 0 after every edit and the next
+    // backspace became a no-op.
+    caret.set((p) => p + text.length);
+  };
+
   const commit = (c: Candidate) => {
-    onChange((prev) => prev + c.text);
+    insert(c.text);
     setComposing((prev) => prev.slice(c.consumed));
     setPage(0);
   };
@@ -135,7 +233,7 @@ export function OnScreenKeyboard({
       setPage(0);
       return;
     }
-    onChange((prev) => prev + ch);
+    insert(ch);
   };
 
   const backspace = () => {
@@ -146,13 +244,30 @@ export function OnScreenKeyboard({
       setPage(0);
       return;
     }
-    onChange((prev) => prev.slice(0, -1));
+    if (!caret) {
+      onChange((prev) => prev.slice(0, -1));
+      return;
+    }
+    onChange((prev) => {
+      const i = Math.max(0, Math.min(caret.pos, prev.length));
+      if (i === 0) return prev; // nothing to the left of the caret
+      return prev.slice(0, i - 1) + prev.slice(i);
+    });
+    // `max(0, …)` keeps this consistent with the no-op branch above: at
+    // index 0 nothing was deleted, and the caret must not move either.
+    caret.set((p) => Math.max(0, p - 1));
+  };
+
+  const moveCaret = (delta: number) => {
+    if (!caret) return;
+    caret.set((p) => Math.max(0, Math.min(value.length, p + delta)));
   };
 
   const clearAll = () => {
     setComposing("");
     setPage(0);
     onChange(() => "");
+    caret?.set(0);
   };
 
   const submit = () => {
@@ -195,6 +310,21 @@ export function OnScreenKeyboard({
         setPage((p) => Math.min(pageCount - 1, p + 1));
       } else if (converting && e.key === "ArrowLeft") {
         setPage((p) => Math.max(0, p - 1));
+      }
+      // Outside conversion the arrows move the caret, which is what they
+      // do in every other text field in the world.
+      else if (e.key === "ArrowRight") moveCaret(1);
+      else if (e.key === "ArrowLeft") moveCaret(-1);
+      else if (e.key === "Home") caret?.set(0);
+      else if (e.key === "End") caret?.set(value.length);
+      else if (e.key === "Delete") {
+        // Forward delete: remove the character to the RIGHT, caret stays.
+        if (caret) {
+          onChange((prev) => {
+            const i = Math.max(0, Math.min(caret.pos, prev.length));
+            return prev.slice(0, i) + prev.slice(i + 1);
+          });
+        }
       } else if (e.key.length === 1) typeLetter(e.key);
       else return;
       e.preventDefault();
@@ -212,48 +342,55 @@ export function OnScreenKeyboard({
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-[#0a0a0a] p-3">
-      <div className="flex shrink-0 items-center gap-3 px-1 pb-2">
-        <div className="flex min-h-14 min-w-0 flex-1 items-center rounded-lg border border-input bg-white/5 px-4">
-          <span
-            className={cn(
-              "truncate text-2xl",
-              value ? "text-foreground" : "text-muted-foreground",
-            )}
-          >
-            {value || placeholder || "Type to search…"}
-          </span>
-          {/* Un-converted pinyin, underlined the way every IME shows it,
-              so it's clear these letters aren't part of the query yet. */}
-          {composing ? (
-            <span className="ml-1 shrink-0 text-2xl text-brand underline decoration-brand/60 underline-offset-4">
-              {composing}
+    <div
+      className={cn(
+        "flex flex-col bg-[#0a0a0a] p-3",
+        embedded ? "h-full w-full min-h-0" : "fixed inset-0 z-[60]",
+      )}
+    >
+      {embedded ? null : (
+        <div className="flex shrink-0 items-center gap-3 px-1 pb-2">
+          <div className="flex min-h-14 min-w-0 flex-1 items-center rounded-lg border border-input bg-white/5 px-4">
+            <span
+              className={cn(
+                "truncate text-2xl",
+                value ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {value || placeholder || "Type to search…"}
             </span>
-          ) : null}
-          <span className="ml-0.5 inline-block h-7 w-0.5 animate-pulse bg-brand" />
+            {/* Un-converted pinyin, underlined the way every IME shows it,
+                so it's clear these letters aren't part of the query yet. */}
+            {composing ? (
+              <span className="ml-1 shrink-0 text-2xl text-brand underline decoration-brand/60 underline-offset-4">
+                {composing}
+              </span>
+            ) : null}
+            <span className="ml-0.5 inline-block h-7 w-0.5 animate-pulse bg-brand" />
+          </div>
+          {/* Clear sits beside the field it clears, not down among the
+              letters — it acts on the whole query, and next to Backspace it
+              was an easy and expensive mis-tap. */}
+          <button
+            type="button"
+            aria-label="Clear"
+            onClick={clearAll}
+            disabled={!value && !composing}
+            className="flex h-14 shrink-0 items-center justify-center gap-2 rounded-lg bg-white/10 px-4 text-lg font-medium hover:bg-white/15 disabled:opacity-30"
+          >
+            <EraserIcon className="size-6" />
+            Clear
+          </button>
+          <button
+            type="button"
+            aria-label="Close keyboard"
+            onClick={onClose}
+            className="flex size-14 shrink-0 items-center justify-center rounded-lg bg-white/10 hover:bg-white/15"
+          >
+            <XIcon className="size-7" />
+          </button>
         </div>
-        {/* Clear sits beside the field it clears, not down among the
-            letters — it acts on the whole query, and next to Backspace it
-            was an easy and expensive mis-tap. */}
-        <button
-          type="button"
-          aria-label="Clear"
-          onClick={clearAll}
-          disabled={!value && !composing}
-          className="flex h-14 shrink-0 items-center justify-center gap-2 rounded-lg bg-white/10 px-4 text-lg font-medium hover:bg-white/15 disabled:opacity-30"
-        >
-          <EraserIcon className="size-6" />
-          Clear
-        </button>
-        <button
-          type="button"
-          aria-label="Close keyboard"
-          onClick={onClose}
-          className="flex size-14 shrink-0 items-center justify-center rounded-lg bg-white/10 hover:bg-white/15"
-        >
-          <XIcon className="size-7" />
-        </button>
-      </div>
+      )}
 
       {/* Candidate bar. Present but empty in Chinese mode so the keys
           below don't jump up and down as candidates come and go — a row
@@ -386,21 +523,47 @@ export function OnScreenKeyboard({
             onClick={() =>
               composing && pageCandidates.length
                 ? commit(pageCandidates[0])
-                : onChange((prev) => prev + " ")
+                : insert(" ")
             }
             className={cn(KEY, "flex-1")}
           >
             space
           </button>
-          <button
-            type="button"
-            aria-label="Search"
-            onClick={submit}
-            className={cn(WIDE, "w-40 shrink-0 bg-brand text-white hover:bg-brand/90")}
-          >
-            <CornerDownLeftIcon className="size-6" />
-            Search
-          </button>
+          {/* Caret movement. Only drawn when the caller actually owns a
+              caret — without one they would be dead keys. Placed in the
+              bottom-right corner, where the Enter key used to be, because
+              that is the corner a thumb already reaches for. */}
+          {caret ? (
+            <>
+              <button
+                type="button"
+                aria-label="Move cursor left"
+                onClick={() => moveCaret(-1)}
+                className={cn(WIDE, "w-24 shrink-0")}
+              >
+                <ChevronLeftIcon className="size-7" />
+              </button>
+              <button
+                type="button"
+                aria-label="Move cursor right"
+                onClick={() => moveCaret(1)}
+                className={cn(WIDE, "w-24 shrink-0")}
+              >
+                <ChevronRightIcon className="size-7" />
+              </button>
+            </>
+          ) : null}
+          {showSubmitKey ? (
+            <button
+              type="button"
+              aria-label={submitLabel}
+              onClick={submit}
+              className={cn(WIDE, "w-40 shrink-0 bg-brand text-white hover:bg-brand/90")}
+            >
+              <CornerDownLeftIcon className="size-6" />
+              {submitLabel}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

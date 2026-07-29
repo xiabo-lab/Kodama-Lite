@@ -4,6 +4,8 @@ import type { Lyrics } from "@/lib/lyrics/types";
 import { parseLRC } from "@/lib/lyrics/parse-lrc";
 import { hitMatches, normalizeForMatch } from "@/lib/lyrics/match";
 import type { CnLyricsParams } from "@/lib/lyrics/netease";
+import type { LyricsCandidate } from "@/lib/lyrics/score";
+import { resolveCandidates, type SearchHit } from "@/lib/lyrics/candidates";
 import { krcToLines } from "@/lib/lyrics/krc";
 
 /**
@@ -70,6 +72,59 @@ export async function fetchKugouLyrics(
   const lines = parseLRC(lrc);
   if (lines.length === 0) return null;
   return { kind: "timed", lines, source: "Kugou" };
+}
+
+/**
+ * Every Kugou hit for a query, with its lyrics, as scoreable candidates.
+ *
+ * Kugou is the most expensive source per candidate — each hit costs a
+ * `krcs` lookup plus a download, i.e. two extra round trips — but it is
+ * also the one whose KRC carries per-word timing, which is what the
+ * karaoke stage's word highlighting runs on. Worth the requests.
+ */
+export async function searchKugouCandidates(
+  p: CnLyricsParams,
+  limit: number,
+): Promise<LyricsCandidate[]> {
+  const hits = await searchSongs(p, limit);
+  return resolveCandidates("kugou", hits, lyricsForHash, limit);
+}
+
+async function lyricsForHash(hash: string): Promise<Lyrics | null> {
+  const candidate = await findLyricCandidate(hash);
+  if (!candidate) return null;
+  const krcLines = await downloadKrcLines(candidate);
+  if (krcLines) return { kind: "timed", lines: krcLines, source: "Kugou" };
+  const lrc = await downloadPlainLrc(candidate);
+  if (!lrc) return null;
+  const lines = parseLRC(lrc);
+  return lines.length > 0 ? { kind: "timed", lines, source: "Kugou" } : null;
+}
+
+async function searchSongs(
+  p: CnLyricsParams,
+  limit: number,
+): Promise<SearchHit<string>[]> {
+  const query = [p.title, p.artist].filter(Boolean).join(" ").trim();
+  if (!query) return [];
+
+  const url = new URL(SEARCH_URL);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("keyword", query);
+  url.searchParams.set("page", "1");
+  url.searchParams.set("pagesize", String(Math.max(limit, 1)));
+  url.searchParams.set("showtype", "1");
+
+  const r = await tauriFetch(url.toString(), { headers: HEADERS });
+  if (!r.ok) throw new Error(`Kugou search ${r.status}`);
+  const data = (await r.json()) as { data?: { info?: KugouSong[] } };
+  return (data.data?.info ?? [])
+    .filter((s): s is KugouSong & { hash: string } => !!s.hash)
+    .map((s) => ({
+      key: s.hash,
+      title: s.songname ?? "",
+      artist: s.singername ?? "",
+    }));
 }
 
 async function searchSong(p: CnLyricsParams): Promise<KugouSong | null> {

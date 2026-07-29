@@ -7,6 +7,11 @@ import { useAppStore } from "@/store/appStore";
 import { ShelfCard } from "@/components/shared/shelf-card";
 import { TrackList } from "@/components/shared/track-list";
 import { VerticalTabs } from "@/components/shared/vertical-tabs";
+import { LocalTab } from "@/screens/LocalTab";
+
+/** The tab strip's own type: the four account-backed tabs plus Local,
+ *  which is a different kind of thing entirely (see below). */
+type Tab = LibraryTab | "local";
 
 /**
  * Library, ported from YTMLite's `routes/library.tsx`: four tabs over the
@@ -27,25 +32,47 @@ import { VerticalTabs } from "@/components/shared/vertical-tabs";
  * library shelves come back with auto-generated "Section N" titles.
  */
 export function Library() {
-  const [tab, setTab] = useState<LibraryTab>("playlists");
+  const [tab, setTab] = useState<Tab>("playlists");
   const status = useAuthStore((s) => s.status);
   const signIn = useAuthStore((s) => s.signIn);
   const signedIn = status === "signed-in";
 
-  const state = useLibraryStore((s) => s.tabs[tab]);
+  const state = useLibraryStore((s) =>
+    tab === "local" ? undefined : s.tabs[tab],
+  );
 
   useEffect(() => {
-    if (!signedIn) return;
-    if (state.status === "idle") dispatchContent({ type: "library:load", tab });
-  }, [tab, state.status, signedIn]);
+    if (!signedIn || tab === "local") return;
+    if (state?.status === "idle") dispatchContent({ type: "library:load", tab });
+  }, [tab, state?.status, signedIn]);
 
-  if (!signedIn) return <SignedOut pending={status === "pending"} onSignIn={signIn} />;
+  // Local music needs no account — it's on a stick in the dashboard. The
+  // signed-out wall guards the four YouTube Music tabs only, so the Local
+  // tab stays reachable when there's no session (or no internet at all,
+  // which in a car is a routine state rather than an error).
+  if (!signedIn && tab !== "local") {
+    return (
+      <div className="flex gap-4 px-6 pb-6 pt-2">
+        <VerticalTabs tabs={LIBRARY_TABS} active={tab} onSelect={setTab} />
+        <div className="min-w-0 flex-1">
+          <SignedOut pending={status === "pending"} onSignIn={signIn} />
+        </div>
+      </div>
+    );
+  }
 
+  // Deliberately NOT height-constrained (`h-full min-h-0`). This screen
+  // must keep exactly one scroller — `main` — so the drag-to-scroll
+  // gesture bound to it still works on a panel that dispatches no touch
+  // events to the webview (see `useDragScroll` and `vertical-tabs.tsx`).
+  // Constraining the height here makes the track list overflow an inner
+  // box instead of growing the page, which on the device would be a list
+  // no finger can reach the bottom of.
   return (
     <div className="flex gap-4 px-6 pb-6 pt-2">
       <VerticalTabs tabs={LIBRARY_TABS} active={tab} onSelect={setTab} />
       <div className="min-w-0 flex-1">
-        <TabBody tab={tab} />
+        {tab === "local" ? <LocalTab /> : <TabBody tab={tab} />}
       </div>
     </div>
   );

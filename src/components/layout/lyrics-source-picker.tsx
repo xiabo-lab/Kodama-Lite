@@ -1,8 +1,54 @@
 import { useEffect, useRef, useState } from "react";
-import { CheckIcon, MicVocalIcon } from "lucide-react";
+import { CheckIcon, MicVocalIcon, SearchIcon } from "lucide-react";
 import { SEARCH_TIERS, SOURCE_LABELS } from "@/lib/lyrics/sources";
+import { LyricsSearchView } from "@/components/layout/lyrics-search-view";
 import { useLyricsStore, type SourceChoice } from "@/store/lyricsStore";
 import { cn } from "@/lib/utils";
+
+/**
+ * Search Lyrics, as a control of its own.
+ *
+ * It used to be a button inside the source popup, which was wrong on two
+ * counts: it made a top-level action cost two taps, and it put "go and ask
+ * a new question" inside a menu whose every other row means "switch between
+ * answers we already have". Those are different kinds of thing and the menu
+ * read as a grab bag. Its own icon, beside the source mic, says so.
+ */
+export function LyricsSearchButton({
+  className,
+  onOpenChange,
+  disabled = false,
+}: {
+  className?: string;
+  /** Told whenever the full-screen search opens or closes, so the karaoke
+   *  stage can keep its lyrics column narrowed while it is up. */
+  onOpenChange?: (open: boolean) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  // A cached result set is a state worth advertising: it means reopening
+  // this costs nothing and goes straight back to the list.
+  const hasResults = useLyricsStore((s) => s.searchResults.length > 0);
+
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label="Search lyrics"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+        className={cn(className, (open || hasResults) && "text-brand")}
+      >
+        <SearchIcon />
+      </button>
+      {open && <LyricsSearchView onClose={() => setOpen(false)} />}
+    </>
+  );
+}
 
 /**
  * The lyrics-source picker YTMLite has and this app was missing. The mic
@@ -48,6 +94,7 @@ export function LyricsSourceButton({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const choice = useLyricsStore((s) => s.choice);
+  const manual = useLyricsStore((s) => s.manual);
 
   useEffect(() => {
     onOpenChange?.(open);
@@ -82,9 +129,9 @@ export function LyricsSourceButton({
         onClick={() => setOpen((v) => !v)}
         className={cn(
           className,
-          // A pinned source is a mode the user should be able to see they
-          // are in without opening the menu.
-          (open || choice !== "auto") && "text-brand",
+          // A pinned source — or a hand-picked lyric — is a mode the user
+          // should be able to see they are in without opening the menu.
+          (open || choice !== "auto" || !!manual) && "text-brand",
         )}
       >
         <MicVocalIcon />

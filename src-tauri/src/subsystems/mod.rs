@@ -10,6 +10,7 @@
 pub mod auth;
 pub mod cache;
 pub mod connectivity;
+pub mod local;
 pub mod media;
 pub mod playback;
 pub mod volume;

@@ -60,6 +60,10 @@ export type Command =
    *  already is instead of at full. The slider itself reaches the stream
    *  through `el.volume` — see `lib/audioEngine.ts`. */
   | { type: "volume:get" }
+  /** Scan a removable drive for playable audio — the Library's Local tab.
+   *  Mounts the drive first if nothing else has; see
+   *  `subsystems/local.rs` for why that has to be the app's job here. */
+  | { type: "local:scan" }
   /** Close the app. The Pi boots straight into this window full-screen
    *  with no desktop chrome around it, so Settings' Quit row is the only
    *  way out that isn't an SSH session. */
@@ -102,7 +106,35 @@ export type AppEvent =
    *  no mixer to talk to — no audio stream yet, or no `pw-dump`/`wpctl`, as
    *  in a plain browser — and the view plane attenuates in the webview
    *  instead. */
-  | { type: "volume:state"; volume: number; muted: boolean; available: boolean };
+  | { type: "volume:state"; volume: number; muted: boolean; available: boolean }
+  | { type: "local:scanning" }
+  /** Tag-reading progress — a full stick is thousands of `ffprobe` spawns
+   *  and tens of seconds, which a bare spinner misrepresents as a hang. */
+  | { type: "local:progress"; done: number; total: number }
+  /** The finished library. `source` names the drive it came from. */
+  | { type: "local:scanned"; source: string; tracks: LocalTrack[] }
+  /** No drive, no music on it, or it couldn't be mounted — always with a
+   *  message saying which, because the three have different fixes. */
+  | { type: "local:error"; message: string };
+
+/**
+ * One playable file from a USB drive.
+ *
+ * `id` doubles as the track's `videoId` throughout the playback store.
+ * That is not a hack: the data plane's `stream:resolve` recognises a local
+ * id and answers with the local route instead of the yt-dlp one (see
+ * `subsystems/playback/mod.rs`), so a USB track goes down the exact same
+ * queue → resolve → `<audio>` path as a streamed one, with no branch
+ * anywhere in the view plane. MPRIS, the karaoke stage, lyrics lookup and
+ * the queue panel all work on it unmodified.
+ */
+export type LocalTrack = {
+  id: string;
+  title: string;
+  artist: string;
+  /** Seconds; 0 when the file had no readable duration. */
+  duration: number;
+};
 
 /** Wire names (kept in one place so both transports agree). `CMD_CHANNEL`
  *  is the Tauri command that receives every dispatch; `EVENT_CHANNEL` is the

@@ -67,7 +67,11 @@ export function LyricsBody({ display = "panel" }: { display?: LyricsDisplay }) {
     return <p className={notice}>No lyrics found.</p>;
   }
   if (lyrics.kind === "timed") {
-    return (
+    // The stage and the side panel are different instruments, and used to
+    // share one renderer at the cost of both. See `StageLyrics`.
+    return display === "stage" ? (
+      <StageLyrics lines={lyrics.lines} />
+    ) : (
       <TimedLyrics
         lines={lyrics.lines}
         display={display}
@@ -189,6 +193,323 @@ function WordLine({ words, offsetSec }: { words: TimedWord[]; offsetSec: number 
         </span>
       ))}
     </>
+  );
+}
+
+// ── The karaoke stage ─────────────────────────────────────────────────
+//
+// Rebuilt on Carlyrics' display model after the scrolling version tested
+// badly. What Carlyrics does (`_line_positions` + `draw_karaoke_line` in
+// `Lyrics_Display.py`) and why each part of it is the right call for a
+// 1920x440 panel in a moving car:
+//
+//  1. THREE FIXED SLOTS, NOT A SCROLLING LIST. Previous line above,
+//     current line centred, next line below — at fixed positions, redrawn
+//     in place. The old stage scrolled a full-length list with a 720ms
+//     eased animation on every line change, which meant the line you were
+//     trying to read was physically in motion for a large fraction of its
+//     own airtime. At this text size the movement is the most salient
+//     thing on the screen. Fixed slots make the current line the only
+//     thing that never moves.
+//
+//  2. THE CURRENT LINE IS CENTRED, not pinned to the top of the viewport.
+//     The old stage put the active line at the top with its two
+//     SUCCESSORS below, so there was no context for what had just been
+//     sung and your eye had to hunt for the highlight. One line back and
+//     one forward is what a singer actually needs.
+//
+//  3. A CONTINUOUS SWEEP, NOT PER-WORD SWITCHING. The sung portion is
+//     divided from the unsung one by a vertical edge that slides left to
+//     right, interpolating INSIDE the word being sung. The old renderer
+//     flipped each word between two opacities as it started — for CJK,
+//     where a "word" is one character maybe 200ms wide, that reads as a
+//     stutter rather than a sweep. A partially-filled glyph is what makes
+//     it look like singing.
+//
+//  4. THE SWEEP WORKS WITHOUT WORD TIMINGS TOO, by interpolating across
+//     the whole line between its start and the next line's start. So a
+//     line-synced source still gets a moving fill instead of a static
+//     highlight — which is most of the perceived quality, and it applies
+//     to the majority of sources.
+//
+//  5. AN INTRO COUNTDOWN before the first line, one dot per remaining
+//     second, so the intro isn't a blank screen and you know when to come
+//     in.
+
+/** Context lines are 0.61x the current line — Carlyrics' 34px against 56. */
+const CONTEXT_SCALE = 0.61;
+/** Carlyrics shows at most 3 countdown dots (1 dot = 1 second). */
+const INTRO_DOTS_MAX = 3;
+
+/**
+ * Where the sung/unsung edge sits on the current line, as a fraction of
+ * its width. Direct port of Carlyrics' `_karaoke_split_px`, in fractions
+ * rather than pixels because the DOM gives us measured element geometry
+ * instead of a font metrics call.
+ *
+ * `widths` are cumulative left offsets per word, normalised to 0..1.
+ */
+export function sweepFraction(
+  words: TimedWord[],
+  bounds: { left: number; right: number }[],
+  t: number,
+  lineEnd: number,
+): number {
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    const wEnd = words[i + 1]?.start ?? w.end ?? lineEnd;
+    if (t < w.start) return bounds[i]?.left ?? 0; // not reached yet
+    if (t < wEnd) {
+      // Mid-word: interpolate across this word's own box. This is the
+      // part that makes a glyph fill partially rather than flip.
+      const span = wEnd - w.start;
+      const f = span > 0 ? (t - w.start) / span : 1;
+      const b = bounds[i];
+      if (!b) return 0;
+      return b.left + f * (b.right - b.left);
+    }
+  }
+  return 1; // every word sung
+}
+
+/**
+ * The current line, drawn as two stacked copies clipped against each
+ * other. The sweep is animated by mutating `clipPath` on the top copy from
+ * a rAF loop — deliberately NOT through React state, because this updates
+ * every frame and re-rendering the sheet at 60fps to move one edge would
+ * be exactly the kind of thing this app's architecture exists to avoid.
+ */
+function KaraokeLine({
+  line,
+  nextStart,
+  offsetSec,
+}: {
+  line: TimedLine;
+  nextStart?: number;
+  offsetSec: number;
+}) {
+  const fillRef = useRef<HTMLSpanElement>(null);
+  const baseRef = useRef<HTMLSpanElement>(null);
+  const playing = usePlaybackStore((s) => s.playing);
+  const storePosition = usePlaybackStore((s) => s.position);
+
+  const words = wordsUsable(line) ? line.words! : undefined;
+  const lineEnd = line.end ?? nextStart ?? line.start + 4;
+
+  useEffect(() => {
+    const fill = fillRef.current;
+    const base = baseRef.current;
+    if (!fill || !base) return;
+
+    // Measure each word's box once per line. `offsetLeft` is relative to
+    // the positioned ancestor, so both copies — identical markup, same
+    // font — agree on it.
+    let bounds: { left: number; right: number }[] = [];
+    if (words) {
+      const spans = Array.from(base.children) as HTMLElement[];
+      const total = base.offsetWidth || 1;
+      bounds = spans.map((el) => ({
+        left: el.offsetLeft / total,
+        right: (el.offsetLeft + el.offsetWidth) / total,
+      }));
+    }
+
+    const startedAt = performance.now();
+    const apply = (elapsed: number) => {
+      const t = storePosition + elapsed - offsetSec;
+      let f: number;
+      if (words && bounds.length === words.length) {
+        f = sweepFraction(words, bounds, t, lineEnd);
+      } else {
+        // No usable word timings: interpolate across the whole line, so a
+        // line-synced source still sweeps rather than sitting static.
+        const span = lineEnd - line.start;
+        f = span > 0 ? (t - line.start) / span : 1;
+      }
+      f = Math.max(0, Math.min(1, f));
+      fill.style.clipPath = `inset(0 ${(1 - f) * 100}% 0 0)`;
+    };
+
+    apply(0);
+    // Paused: the clock isn't moving, so one computation is the whole job.
+    if (!playing) return;
+    let raf = requestAnimationFrame(function tick() {
+      apply((performance.now() - startedAt) / 1000);
+      raf = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [words, line.start, lineEnd, storePosition, playing, offsetSec]);
+
+  const content = words
+    ? words.map((w, i) => <span key={i}>{w.text}</span>)
+    : line.text;
+
+  return (
+    <span className="relative inline-block">
+      {/* Unsung: dimmed white. Carlyrics has this the other way round
+          (unsung yellow, sung white), which works on its display but puts
+          a whole line of fully-saturated colour on screen as the RESTING
+          state — at 3.75rem of CJK on a dark panel that is a lot of red to
+          read past. Dim white resting, brand red sweeping, means the
+          colour marks exactly where you are rather than where you aren't,
+          which is the question the line is being read to answer. */}
+      <span ref={baseRef} className="whitespace-pre text-foreground/35">
+        {content}
+      </span>
+      {/* Sung — same markup, same box, clipped from the right. `inset-0`
+          plus identical content guarantees the two copies are registered
+          pixel for pixel, which is what makes a half-filled glyph line up
+          with itself. */}
+      <span
+        ref={fillRef}
+        aria-hidden
+        className="absolute inset-0 whitespace-pre text-brand"
+        style={{ clipPath: "inset(0 100% 0 0)" }}
+      >
+        {content}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The three-slot stage. Every slot is a fixed-height row so nothing
+ * reflows as the text changes: a line that wraps or a missing context line
+ * must not be able to shift the current line off centre.
+ */
+function StageLyrics({ lines }: { lines: TimedLine[] }) {
+  const rawPosition = usePlaybackStore((s) => s.position);
+  const offset = useSettingsStore((s) => s.lyricsOffsetSec);
+  const position = rawPosition - offset;
+  const activeIdx = findActiveIdx(lines, position);
+
+  // Before the first line: count the intro down instead of showing a blank
+  // stage, and put the upcoming first line where it will stay, so it
+  // doesn't jump when it becomes active.
+  if (activeIdx < 0) {
+    const first = lines[0];
+    const remaining = (first?.start ?? 0) - position;
+    const dots = Math.max(0, Math.min(INTRO_DOTS_MAX, Math.ceil(remaining)));
+    return (
+      <StageFrame
+        above={
+          dots > 0 ? (
+            <span className="tracking-[0.4em] text-brand">
+              {"•".repeat(dots)}
+            </span>
+          ) : null
+        }
+        current={<span className="text-brand">{first?.text || "♪"}</span>}
+        below={<span className="text-muted-foreground/70">{lines[1]?.text ?? ""}</span>}
+      />
+    );
+  }
+
+  const prev = lines[activeIdx - 1];
+  const cur = lines[activeIdx];
+  const next = lines[activeIdx + 1];
+
+  return (
+    <StageFrame
+      above={
+        prev ? (
+          <span className="text-muted-foreground/60">{prev.text}</span>
+        ) : null
+      }
+      current={
+        <KaraokeLine
+          // Keyed by index so each line gets a fresh measurement pass and
+          // its own rAF loop — without this the sweep would carry the
+          // previous line's word boxes into the next one.
+          key={activeIdx}
+          line={cur}
+          nextStart={next?.start}
+          offsetSec={offset}
+        />
+      }
+      below={
+        next ? (
+          <span className="text-muted-foreground/70">{next.text}</span>
+        ) : null
+      }
+    />
+  );
+}
+
+/**
+ * Fixed three-row frame. The context rows are sized in `em` off the
+ * current line's font, so one `--lyric-font` still drives the whole stage
+ * and the proportions hold at any panel height.
+ *
+ * `overflow-hidden` + `whitespace-nowrap` on each row rather than wrapping:
+ * a wrapped line would grow its row and push the current line off centre,
+ * which is the one thing this layout exists to prevent. Long lines are
+ * scaled down to fit instead — Carlyrics' `MAX_LINE_WIDTH_FRAC` shrink.
+ */
+function StageFrame({
+  above,
+  current,
+  below,
+}: {
+  above: React.ReactNode;
+  current: React.ReactNode;
+  below: React.ReactNode;
+}) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-[var(--lyric-gap,0.5rem)] px-8">
+      <Row scale={CONTEXT_SCALE}>{above}</Row>
+      <Row scale={1} bold>
+        {current}
+      </Row>
+      <Row scale={CONTEXT_SCALE}>{below}</Row>
+    </div>
+  );
+}
+
+function Row({
+  children,
+  scale,
+  bold,
+}: {
+  children: React.ReactNode;
+  scale: number;
+  bold?: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
+
+  // Shrink-to-fit, measured rather than guessed: a CJK line can be three
+  // times the width of its romanised equivalent, and truncating a lyric
+  // mid-phrase is worse than making it smaller.
+  useEffect(() => {
+    const box = ref.current;
+    const text = inner.current;
+    if (!box || !text) return;
+    text.style.transform = "scale(1)";
+    const avail = box.clientWidth;
+    const want = text.scrollWidth;
+    if (want > avail && avail > 0) {
+      text.style.transform = `scale(${Math.max(0.35, avail / want)})`;
+    }
+  });
+
+  return (
+    <div
+      ref={ref}
+      className="flex w-full shrink-0 items-center justify-center overflow-hidden"
+      style={{
+        fontSize: `calc(var(--lyric-font) * ${scale})`,
+        lineHeight: STAGE_LEADING,
+        height: `calc(var(--lyric-font) * ${scale} * ${STAGE_LEADING})`,
+      }}
+    >
+      <div
+        ref={inner}
+        className={cn("whitespace-nowrap", bold ? "font-[650]" : "font-medium")}
+      >
+        {children}
+      </div>
+    </div>
   );
 }
 

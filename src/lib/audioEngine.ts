@@ -292,7 +292,15 @@ export function useAudioEngine(): void {
       store().setPlayError(msg);
     };
     const onPlaying = () => {
-      if (store().status !== "ready") usePlaybackStore.setState({ status: "ready" });
+      // Clear the error too, not just the status. `setPlayError` now keeps
+      // the FIRST explanation rather than the last (so the data plane's
+      // readable reason survives the element's MEDIA_ERR code), which
+      // means a message that is no longer true can no longer be displaced
+      // by a later one — audible playback is the proof it's stale.
+      const s = store();
+      if (s.status !== "ready" || s.error !== undefined) {
+        usePlaybackStore.setState({ status: "ready", error: undefined });
+      }
     };
 
     el.addEventListener("timeupdate", onTimeUpdate);

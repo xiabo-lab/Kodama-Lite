@@ -14,8 +14,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
 import { LikeButton } from "@/components/shared/like-button";
-import { LyricsBody, STAGE_LEADING, useDisplayLyrics } from "@/components/layout/lyrics-view";
-import { LyricsSourceButton } from "@/components/layout/lyrics-source-picker";
+import { ConfirmLyricsButton } from "@/components/shared/confirm-lyrics-button";
+import { LyricsBody, useDisplayLyrics } from "@/components/layout/lyrics-view";
+import {
+  LyricsSearchButton,
+  LyricsSourceButton,
+} from "@/components/layout/lyrics-source-picker";
 import { QueueButton, QueuePanel } from "@/components/layout/queue-panel";
 import { useQueuePanelStore } from "@/store/queuePanelStore";
 import { cn } from "@/lib/utils";
@@ -36,15 +40,22 @@ const BTN_GAP = "gap-[clamp(0.75rem,2.5vw,2rem)]";
 
 const LYRIC_FONT = "clamp(1.75rem,15vh,3.75rem)";
 const LYRIC_GAP = "clamp(0.3rem,1.8vh,0.9rem)";
-const STAGE_LINES = 3;
 const CHROME_MS = 5000;
 
-function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
+/**
+ * The close button is sized and placed to mirror `KaraokeCornerButton` in
+ * `TopBar.tsx` exactly — 160x60, flush to the top-right corner with no
+ * margin or rounding on the outer two edges, icon inset for looks.
+ *
+ * That symmetry is the whole point: the same corner opens the stage and
+ * closes it, so the gesture is one place your hand learns rather than two.
+ * It also inherits what makes that button reliable — two screen edges stop
+ * an over-shot finger, so the literal corner pixel is still inside the hit
+ * box. The old button was a `SECONDARY_BTN` (~56-64px square) inset 12px
+ * from both edges, which put the corner *outside* the target.
+ */
+const CLOSE_BTN =
+  "absolute right-0 top-0 z-20 flex h-[60px] w-40 items-center justify-end rounded-bl-md pr-6 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
 
 /**
  * Volume slider. Its own component so the volume subscription re-renders
@@ -133,7 +144,6 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
   const toggle = usePlaybackStore((s) => s.toggle);
   const next = usePlaybackStore((s) => s.next);
   const prev = usePlaybackStore((s) => s.prev);
-  const seek = usePlaybackStore((s) => s.seek);
   const setShuffle = usePlaybackStore((s) => s.setShuffle);
   const cycleRepeat = usePlaybackStore((s) => s.cycleRepeat);
   const track = index >= 0 ? queue[index] : undefined;
@@ -149,36 +159,31 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
   // the text in what's left, so nothing is ever hidden behind a panel.
   const queueOpen = useQueuePanelStore((s) => s.open);
   const [sourceOpen, setSourceOpen] = useState(false);
-  const panelOpen = queueOpen || sourceOpen;
+  // The search screen is a full-screen overlay, but the stage still has to
+  // treat it as "a panel is open" — otherwise the lyrics column widens
+  // back out underneath it and snaps when it closes.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const panelOpen = queueOpen || sourceOpen || searchOpen;
 
-  // The lyric viewport is capped to exactly three big lines so the active
-  // one sits at the top with its two successors below. That only makes
-  // sense for a sheet that highlights and scrolls itself: an unsynced
-  // transcript has no active line, so the same cap left it frozen on the
-  // first three lines for the whole song with the scrollbar hidden. Plain
-  // text now gets the full height instead.
+  // Only needed for the "estimated timing" disclosure now — the stage
+  // sizes itself (see `StageLyrics`).
   const displayLyrics = useDisplayLyrics();
-  const lineHighlighted = displayLyrics?.kind === "timed";
   const estimatedTiming = displayLyrics?.kind === "timed" && displayLyrics.estimated;
 
-  const [scrub, setScrub] = useState<number | null>(null);
+  // Plain hide-after-a-delay now. It used to re-arm the timer for as long
+  // as a scrub was in progress, so the band couldn't vanish from under a
+  // finger mid-drag; with the slider gone from this band there is nothing
+  // left in it to hold open for.
   const [chrome, setChrome] = useState(false);
   const hideRef = useRef<number | null>(null);
-  const scrubRef = useRef(scrub);
-  scrubRef.current = scrub;
 
   const revealChrome = useCallback(() => {
     setChrome(true);
     if (hideRef.current !== null) window.clearTimeout(hideRef.current);
-    const tick = () => {
-      if (scrubRef.current !== null) {
-        hideRef.current = window.setTimeout(tick, CHROME_MS);
-        return;
-      }
+    hideRef.current = window.setTimeout(() => {
       hideRef.current = null;
       setChrome(false);
-    };
-    hideRef.current = window.setTimeout(tick, CHROME_MS);
+    }, CHROME_MS);
   }, []);
 
   useEffect(() => {
@@ -189,7 +194,6 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
 
   const hasTrack = !!track;
   const loading = status === "loading" && playing;
-  const shownPosition = scrub ?? position;
 
   return (
     <div
@@ -200,65 +204,58 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
         revealChrome();
       }}
     >
+      {/* Tap-to-reveal band: the track's name, centered, and nothing else.
+          It used to also carry a seek slider with elapsed/total readouts,
+          which is what pushed the title into a cramped 38%-wide column on
+          the left. The slider is gone by request, and with the full width
+          back the title can be centered and set 1.3x larger — which is the
+          size it needs to be readable at a glance from the driver's seat,
+          the only moment this band exists for. Seeking is still available
+          in the always-on control row below, and the thin progress line at
+          the bottom of the screen still shows position.
+
+          Permanently `pointer-events-none`: nothing in here is interactive
+          any more, and a full-width band that swallowed taps would make
+          reachability depend on how tall a title happened to render. */}
       <div
         aria-hidden={!chrome}
-        // Permanently `pointer-events-none` on the container: it's a
-        // full-width band whose height comes from its content, and nothing
-        // in it except the seek slider is interactive. Letting the band
-        // itself swallow taps meant its exact laid-out height decided
-        // whether controls below it were reachable — a hit target that
-        // depends on how tall a title happened to render is a bug waiting
-        // to happen. The slider opts back in below.
         className={cn(
-          "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center gap-[clamp(0.75rem,2vw,2rem)] bg-gradient-to-b from-black via-black/85 to-transparent pb-6 pl-[clamp(1rem,3vw,3rem)] pr-[clamp(4.5rem,7vw,7rem)] pt-[clamp(0.5rem,2.5vh,1rem)] transition-opacity duration-300",
+          "pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-col items-center gap-1 bg-gradient-to-b from-black via-black/85 to-transparent px-[clamp(1rem,3vw,3rem)] pb-6 pt-[clamp(0.5rem,2.5vh,1rem)] transition-opacity duration-300",
           chrome ? "opacity-100" : "opacity-0",
         )}
       >
-        <div className="flex min-w-0 max-w-[38%] shrink items-baseline gap-2">
-          <span className="min-w-0 truncate font-semibold text-[clamp(1rem,3.2vh,1.5rem)]">{track?.title ?? "Nothing playing"}</span>
+        {/* 1.3x the previous clamp at every stop: 1rem→1.3rem,
+            3.2vh→4.16vh, 1.5rem→1.95rem. Scaling all three keeps the
+            clamp behaving the same way across panel heights instead of
+            only growing at one end. */}
+        <div className="flex max-w-full items-baseline justify-center gap-2">
+          <span className="min-w-0 truncate font-semibold text-[clamp(1.3rem,4.16vh,1.95rem)]">
+            {track?.title ?? "Nothing playing"}
+          </span>
           {track?.subtitle ? (
-            <span className="min-w-0 truncate text-[clamp(0.85rem,2.4vh,1.125rem)] text-muted-foreground">— {track.subtitle}</span>
-          ) : null}
-          {/* Disclosed here rather than over the lyrics: this band is what
-              you reveal when you tap to ask what's going on, and the stage
-              has no spare vertical room on a 440px panel. */}
-          {estimatedTiming ? (
-            <span className="shrink-0 whitespace-nowrap text-[clamp(0.75rem,2.1vh,1rem)] text-brand">
-              · estimated timing
+            <span className="min-w-0 truncate text-[clamp(1.105rem,3.12vh,1.4625rem)] text-muted-foreground">
+              — {track.subtitle}
             </span>
           ) : null}
         </div>
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <span className="w-12 shrink-0 text-right text-sm tabular-nums text-muted-foreground">{formatTime(shownPosition)}</span>
-          <input
-            type="range"
-            min={0}
-            max={duration > 0 ? duration : 100}
-            value={shownPosition}
-            disabled={!hasTrack || duration <= 0}
-            onChange={(e) => setScrub(Number(e.target.value))}
-            onMouseUp={() => {
-              if (scrub !== null) seek(scrub);
-              setScrub(null);
-            }}
-            // The one interactive thing in the chrome band — and only while
-            // the band is actually revealed.
-            className={cn(
-              "h-3 min-w-0 flex-1 accent-brand",
-              chrome ? "pointer-events-auto" : "pointer-events-none",
-            )}
-          />
-          <span className="w-12 shrink-0 text-sm tabular-nums text-muted-foreground">{formatTime(duration)}</span>
-        </div>
+        {/* Disclosed here rather than over the lyrics: this band is what
+            you reveal when you tap to ask what's going on, and the stage
+            has no spare vertical room on a 440px panel. On its own line
+            now that the band is a centered column. */}
+        {estimatedTiming ? (
+          <span className="whitespace-nowrap text-[clamp(0.75rem,2.1vh,1rem)] text-brand">
+            estimated timing
+          </span>
+        ) : null}
       </div>
 
       <button
         type="button"
         aria-label="Exit full screen"
         onClick={onClose}
-        className={cn(SECONDARY_BTN, "absolute right-3 top-3 z-20")}
+        className={CLOSE_BTN}
       >
-        <XIcon />
+        <XIcon className="size-9" />
       </button>
 
       <div
@@ -271,14 +268,14 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
         )}
         style={{ "--lyric-font": LYRIC_FONT, "--lyric-gap": LYRIC_GAP } as React.CSSProperties}
       >
-        <div
-          className="w-full overflow-hidden"
-          style={
-            lineHighlighted
-              ? { height: `calc(${STAGE_LINES} * ${STAGE_LEADING} * var(--lyric-font) + ${STAGE_LINES - 1} * var(--lyric-gap))` }
-              : { height: "100%" }
-          }
-        >
+        {/* Full height, unconditionally. This used to be capped to exactly
+            three lines' worth for a timed sheet, because the stage was a
+            scrolling list and the cap was what limited how much of it
+            showed. The stage now lays out its own three fixed slots and
+            centres them (see `StageLyrics`), so the cap would only fight
+            it — and an unsynced transcript still wants the whole height
+            to scroll in. */}
+        <div className="h-full w-full overflow-hidden">
           <LyricsBody display="stage" />
         </div>
       </div>
@@ -332,6 +329,15 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="absolute inset-y-0 right-6 flex items-center gap-[clamp(0.25rem,1vw,0.75rem)]">
+          {/* Search sits to the LEFT of the source mic: it is the more
+              drastic of the two — "none of these are right, go and ask
+              again" — and reading left to right you reach the cheap fix
+              before the expensive one. */}
+          <LyricsSearchButton
+            className={SECONDARY_BTN}
+            onOpenChange={setSearchOpen}
+            disabled={!hasTrack}
+          />
           <LyricsSourceButton
             className={SECONDARY_BTN}
             placement="screen-right"
@@ -344,6 +350,14 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
+      {/* The green confirm button, lower-left, on the progress line's own
+          row. The stage is where lyrics are actually READ, so this is
+          where the answer to "are these right?" is known — putting it only
+          on the player bar would mean leaving the screen to say yes.
+          Always visible (not tied to the tap-to-reveal chrome): it is the
+          one control here you reach for *because* of what is on screen. */}
+      <ConfirmLyricsButton className="absolute bottom-2 left-3 z-20 size-11" />
+
       <div
         aria-hidden
         className={cn(
@@ -351,7 +365,7 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
           chrome ? "opacity-0" : "opacity-100",
         )}
       >
-        <div className="h-full bg-brand" style={{ width: `${duration > 0 ? Math.min(100, (shownPosition / duration) * 100) : 0}%` }} />
+        <div className="h-full bg-brand" style={{ width: `${duration > 0 ? Math.min(100, (position / duration) * 100) : 0}%` }} />
       </div>
     </div>
   );

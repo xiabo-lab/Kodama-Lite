@@ -1,6 +1,8 @@
 // Ported verbatim from YTMLite (only the fetch import source changed).
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type { Lyrics } from "@/lib/lyrics/types";
+import type { LyricsCandidate } from "@/lib/lyrics/score";
+import { resolveCandidates, type SearchHit } from "@/lib/lyrics/candidates";
 import { parseLRC } from "@/lib/lyrics/parse-lrc";
 import { hitMatches, normalizeForMatch } from "@/lib/lyrics/match";
 
@@ -53,6 +55,51 @@ export async function fetchNeteaseLyrics(
   const lines = parseLRC(lrc);
   if (lines.length === 0) return null;
   return { kind: "timed", lines, source: "NetEase" };
+}
+
+/** Every NetEase hit for a query, with its lyrics, as scoreable
+ *  candidates. Unlike `fetchNeteaseLyrics` this applies NO `hitMatches`
+ *  veto — the whole point is to let the scorer rank them. */
+export async function searchNeteaseCandidates(
+  p: CnLyricsParams,
+  limit: number,
+): Promise<LyricsCandidate[]> {
+  const hits = await searchSongs(p, limit);
+  return resolveCandidates("netease", hits, fetchLyricsFor, limit);
+}
+
+async function fetchLyricsFor(id: number): Promise<Lyrics | null> {
+  const lrc = await fetchLyric(id);
+  if (!lrc) return null;
+  const lines = parseLRC(lrc);
+  return lines.length > 0 ? { kind: "timed", lines, source: "NetEase" } : null;
+}
+
+function artistOf(s: NeteaseSong): string {
+  return (s.artists ?? [])
+    .map((a) => a.name ?? "")
+    .filter(Boolean)
+    .join("/");
+}
+
+async function searchSongs(
+  p: CnLyricsParams,
+  limit: number,
+): Promise<SearchHit<number>[]> {
+  const query = [p.title, p.artist].filter(Boolean).join(" ").trim();
+  if (!query) return [];
+
+  const url = new URL(SEARCH_URL);
+  url.searchParams.set("s", query);
+  url.searchParams.set("type", "1"); // 1 = songs
+  url.searchParams.set("limit", String(Math.max(limit, 1)));
+
+  const r = await tauriFetch(url.toString(), { headers: HEADERS });
+  if (!r.ok) throw new Error(`NetEase search ${r.status}`);
+  const data = (await r.json()) as { result?: { songs?: NeteaseSong[] } };
+  return (data.result?.songs ?? [])
+    .filter((s): s is NeteaseSong & { id: number } => typeof s.id === "number")
+    .map((s) => ({ key: s.id, title: s.name ?? "", artist: artistOf(s) }));
 }
 
 async function searchSong(p: CnLyricsParams): Promise<NeteaseSong | null> {

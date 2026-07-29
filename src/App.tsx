@@ -16,6 +16,7 @@ import { useLibraryStore } from "@/store/libraryStore";
 import { useRadioStore } from "@/store/radioStore";
 import { useLyricsStore } from "@/store/lyricsStore";
 import { useLikedSongsStore } from "@/store/likedSongsStore";
+import { useLocalStore } from "@/store/localStore";
 import { AppShell } from "@/app/AppShell";
 
 /**
@@ -37,6 +38,7 @@ export default function App() {
     useAuthStore.getState().applyEvents(events);
     useCacheStore.getState().applyEvents(events);
     usePlaybackStore.getState().applyEvents(events);
+    useLocalStore.getState().applyEvents(events);
   }, []);
 
   const applyContentEvents = useCallback((events: ContentEvent[]) => {

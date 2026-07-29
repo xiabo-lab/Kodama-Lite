@@ -4,6 +4,8 @@ import type { Lyrics } from "@/lib/lyrics/types";
 import { parseLRC } from "@/lib/lyrics/parse-lrc";
 import { hitMatches, normalizeForMatch } from "@/lib/lyrics/match";
 import type { CnLyricsParams } from "@/lib/lyrics/netease";
+import type { LyricsCandidate } from "@/lib/lyrics/score";
+import { resolveCandidates, type SearchHit } from "@/lib/lyrics/candidates";
 
 /**
  * QQ Music (QQ音乐) — the other major Chinese-language lyric source,
@@ -125,6 +127,60 @@ export async function fetchQqLyrics(
   const lines = parseLRC(lrc);
   if (lines.length === 0) return null;
   return { kind: "timed", lines, source: "QQ Music" };
+}
+
+/**
+ * QQ hits for a query, with lyrics, as scoreable candidates.
+ *
+ * Capped harder than the other sources, and Carlyrics caps it the same way
+ * (`CANDIDATE_QUERY_LIMITS = {"QQ": 1}` for the automatic sweep) for the
+ * two reasons in the SEARCH_LIMIT comment above: QQ's relevance is poor
+ * past the top hit, and it rate-limits under rapid repeat queries. A
+ * *manual* search can afford to ask for more — it happens once, on purpose,
+ * and the user is looking at the results — so the limit is a parameter
+ * rather than a constant here.
+ */
+export async function searchQqCandidates(
+  p: CnLyricsParams,
+  limit: number,
+): Promise<LyricsCandidate[]> {
+  const hits = await searchSongs(p, limit);
+  return resolveCandidates("qq", hits, lyricsForMid, limit);
+}
+
+async function lyricsForMid(mid: string): Promise<Lyrics | null> {
+  const lrc = await fetchLyric(mid);
+  if (!lrc) return null;
+  const lines = parseLRC(lrc);
+  return lines.length > 0 ? { kind: "timed", lines, source: "QQ Music" } : null;
+}
+
+async function searchSongs(
+  p: CnLyricsParams,
+  limit: number,
+): Promise<SearchHit<string>[]> {
+  const query = [p.title, p.artist].filter(Boolean).join(" ").trim();
+  if (!query) return [];
+
+  const url = new URL(SEARCH_URL);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("p", "1");
+  url.searchParams.set("n", String(Math.max(limit, 1)));
+  url.searchParams.set("w", query);
+
+  const data = await fetchJson<{ data?: { song?: { list?: QqSong[] } } }>(
+    url.toString(),
+  );
+  return (data.data?.song?.list ?? [])
+    .filter((s): s is QqSong & { songmid: string } => !!s.songmid)
+    .map((s) => ({
+      key: s.songmid,
+      title: s.songname ?? "",
+      artist: (s.singer ?? [])
+        .map((a) => a.name ?? "")
+        .filter(Boolean)
+        .join("/"),
+    }));
 }
 
 async function searchSong(p: CnLyricsParams): Promise<QqSong | null> {

@@ -24,11 +24,18 @@ interface TabState {
 
 const EMPTY_TAB: TabState = { status: "idle", sections: [], tracks: [] };
 
-export const LIBRARY_TABS: { id: LibraryTab; label: string }[] = [
+/**
+ * `local` is a tab of this screen but NOT of this store: it holds music
+ * from a USB drive, has no account behind it, and is owned by
+ * `localStore`. It is listed here only because the tab strip is one
+ * control and has to render in one order — Local last, under Artists.
+ */
+export const LIBRARY_TABS: { id: LibraryTab | "local"; label: string }[] = [
   { id: "playlists", label: "Playlists" },
   { id: "songs", label: "Songs" },
   { id: "albums", label: "Albums" },
   { id: "artists", label: "Artists" },
+  { id: "local", label: "Local" },
 ];
 
 interface LibraryState {

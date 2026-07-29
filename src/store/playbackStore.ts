@@ -275,10 +275,22 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
     },
 
     resume: () => {
-      const { queue, index, streamUrl } = get();
+      const { queue, index, streamUrl, status } = get();
       if (index < 0 || index >= queue.length) return;
-      if (!streamUrl) {
-        set({ status: "loading", error: undefined });
+      // A failed track needs the URL cleared before it can be retried.
+      //
+      // `stream:resolve` answers instantly with a deterministic URL — the
+      // download only happens when the `<audio>` element GETs it — so after
+      // a failure `streamUrl` is still set and looks perfectly healthy.
+      // Pressing play then did nothing at all: `resume` skipped the
+      // resolve, and the `[streamUrl]` effect in `audioEngine` never re-ran
+      // because the value hadn't changed. The track was stuck until you
+      // navigated away and back. Dropping the URL first makes the
+      // undefined → URL transition happen again, which re-loads the element
+      // and gives the data plane a fresh run at the download (which now has
+      // its own player-client retries — see `server.rs`).
+      if (!streamUrl || status === "error") {
+        set({ status: "loading", error: undefined, streamUrl: undefined });
         requestStream(queue[index].videoId);
         prefetchNext(queue, index);
       }
@@ -340,7 +352,21 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
 
     setPosition: (position) => set({ position }),
     setDuration: (duration) => set({ duration }),
-    setPlayError: (message) => set({ status: "error", playing: false, error: message }),
+    // The element's own message ("audio error (code 4)") is a last resort.
+    //
+    // A failed download produces BOTH events: the data plane emits
+    // `stream:error` with a classified, readable reason, and the `<audio>`
+    // element then errors on the 502 a moment later. The element's message
+    // arrives second and would overwrite the useful one with a MEDIA_ERR
+    // code, so an explanation that already exists never survives to the
+    // screen. Whoever explained it first keeps the floor; `loadTrackAt`
+    // clears `error` on every track change, so this can't go stale.
+    setPlayError: (message) =>
+      set((s) => ({
+        status: "error",
+        playing: false,
+        error: s.error ?? message,
+      })),
 
     applyEvents: (events) => {
       for (const e of events) {

@@ -53,7 +53,7 @@ pub fn start(app: &AppHandle) {
     let ytdlp_bin = ytdlp::managed_path(app);
 
     let (tx, rx) = watch::channel(None);
-    let stream_server = StreamServer::new(cache_dir, ytdlp_bin);
+    let stream_server = StreamServer::new(cache_dir, ytdlp_bin, app.clone());
     app.manage(PlaybackHandle {
         server: stream_server.clone(),
         base_url: rx,
@@ -93,10 +93,41 @@ pub fn resolve(app: &AppHandle, video_id: String) {
             );
             return;
         };
+        // A local (USB) track resolves to the local route instead. Doing
+        // the fork HERE rather than in the view plane is what lets local
+        // files reuse the entire playback path unchanged: the store fires
+        // the same `stream:resolve`, gets back the same `stream:ready`,
+        // and the audio element neither knows nor cares that these bytes
+        // came off a stick rather than out of yt-dlp.
+        let is_local = {
+            let index = app.state::<crate::subsystems::local::LocalIndex>();
+            let map = index.lock().await;
+            map.contains_key(&video_id)
+        };
+
+        // A local id we don't currently hold: the queue outlived the index.
+        // The queue is persisted across restarts and the index is not, so
+        // after a reboot the restored track asks to resolve before anything
+        // has scanned the drive. Handing that id to yt-dlp — which is what
+        // used to happen — spends several seconds failing and then reports
+        // the track as unavailable, when the truth is simply that the drive
+        // has not been read yet.
+        if !is_local && crate::subsystems::local::looks_local(&video_id) {
+            emit(
+                &app,
+                AppEvent::StreamError {
+                    video_id,
+                    message: "Open Library → Local to scan the USB drive first.".into(),
+                },
+            );
+            return;
+        }
+
+        let path = if is_local { "local" } else { "stream" };
         emit(
             &app,
             AppEvent::StreamReady {
-                url: format!("{base}/stream/{video_id}"),
+                url: format!("{base}/{path}/{video_id}"),
                 video_id,
             },
         );
@@ -135,6 +166,19 @@ pub fn prefetch(app: &AppHandle, video_id: String) {
     tauri::async_runtime::spawn(async move {
         if wait_for_base_url(&app).await.is_none() {
             return;
+        }
+        // A local file is already on disk — prefetching it would hand its
+        // id to yt-dlp as if it were a videoId, which fails slowly and
+        // pointlessly on every USB track the queue looks ahead to. The
+        // shape check covers the same not-yet-scanned case `resolve` does.
+        if crate::subsystems::local::looks_local(&video_id) {
+            return;
+        }
+        {
+            let index = app.state::<crate::subsystems::local::LocalIndex>();
+            if index.lock().await.contains_key(&video_id) {
+                return;
+            }
         }
         app.state::<PlaybackHandle>()
             .server

@@ -221,3 +221,72 @@ describe("volume persistence", () => {
     expect(store.getState().volume).toBe(1);
   });
 });
+
+/**
+ * Failed-track recovery. Both of these are races that only show up when a
+ * download fails, which is exactly when nobody is in a position to debug
+ * them — so they're pinned here.
+ */
+describe("recovering from a failed track", () => {
+  it("keeps the data plane's reason over the audio element's code", () => {
+    // Both fire on a failed download: `stream:error` carries a classified,
+    // readable sentence, then the <audio> element errors on the 502 with a
+    // MEDIA_ERR code. The element's message arrives second and must not
+    // overwrite the explanation.
+    usePlaybackStore.getState().playQueue([track("a")], 0);
+    usePlaybackStore.getState().applyEvents([
+      {
+        type: "stream:error",
+        videoId: "a",
+        message: "This track is DRM protected.",
+      },
+    ]);
+    usePlaybackStore.getState().setPlayError("audio error (code 4)");
+    expect(usePlaybackStore.getState().error).toBe("This track is DRM protected.");
+  });
+
+  it("still reports the element's error when nothing else explained it", () => {
+    usePlaybackStore.getState().playQueue([track("a")], 0);
+    usePlaybackStore.getState().setPlayError("audio error (code 4)");
+    expect(usePlaybackStore.getState().error).toBe("audio error (code 4)");
+  });
+
+  it("clears the error on the next track, so it can't go stale", () => {
+    usePlaybackStore.getState().playQueue([track("a"), track("b")], 0);
+    usePlaybackStore.getState().setPlayError("audio error (code 4)");
+    usePlaybackStore.getState().next();
+    expect(usePlaybackStore.getState().error).toBeUndefined();
+  });
+
+  it("re-resolves on resume after a failure", () => {
+    // `stream:resolve` answers instantly with a deterministic URL, so after
+    // a failure `streamUrl` is still set and resume used to skip the
+    // resolve entirely — leaving the track unplayable until you navigated
+    // away and back. Dropping the URL is what makes the retry real.
+    usePlaybackStore.getState().playQueue([track("a")], 0);
+    usePlaybackStore.getState().applyEvents([
+      { type: "stream:ready", videoId: "a", url: "http://127.0.0.1/x/stream/a" },
+    ]);
+    usePlaybackStore.getState().applyEvents([
+      { type: "stream:error", videoId: "a", message: "Couldn't download." },
+    ]);
+    expect(usePlaybackStore.getState().streamUrl).toBe("http://127.0.0.1/x/stream/a");
+
+    usePlaybackStore.getState().resume();
+    const s = usePlaybackStore.getState();
+    expect(s.streamUrl).toBeUndefined();
+    expect(s.status).toBe("loading");
+    expect(s.error).toBeUndefined();
+    expect(s.playing).toBe(true);
+  });
+
+  it("does not re-resolve a healthy track on resume", () => {
+    usePlaybackStore.getState().playQueue([track("a")], 0);
+    usePlaybackStore.getState().applyEvents([
+      { type: "stream:ready", videoId: "a", url: "http://127.0.0.1/x/stream/a" },
+    ]);
+    usePlaybackStore.setState({ playing: false });
+    usePlaybackStore.getState().resume();
+    expect(usePlaybackStore.getState().streamUrl).toBe("http://127.0.0.1/x/stream/a");
+  });
+});

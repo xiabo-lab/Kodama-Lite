@@ -1,10 +1,21 @@
 import { fetchYtMusicLyrics } from "@/lib/lyrics/ytmusic";
-import { fetchLrclibLyrics } from "@/lib/lyrics/lrclib";
-import { fetchKugouLyrics } from "@/lib/lyrics/kugou";
-import { fetchNeteaseLyrics } from "@/lib/lyrics/netease";
-import { fetchMusixmatchLyrics } from "@/lib/lyrics/musixmatch";
-import { fetchQqLyrics } from "@/lib/lyrics/qq";
-import { fetchGeniusLyrics } from "@/lib/lyrics/genius";
+import { fetchLrclibLyrics, searchLrclibCandidates } from "@/lib/lyrics/lrclib";
+import { fetchKugouLyrics, searchKugouCandidates } from "@/lib/lyrics/kugou";
+import { fetchNeteaseLyrics, searchNeteaseCandidates } from "@/lib/lyrics/netease";
+import {
+  fetchMusixmatchLyrics,
+  searchMusixmatchCandidates,
+} from "@/lib/lyrics/musixmatch";
+import { fetchQqLyrics, searchQqCandidates } from "@/lib/lyrics/qq";
+import { fetchGeniusLyrics, searchGeniusCandidates } from "@/lib/lyrics/genius";
+import {
+  ACCEPT_SCORE,
+  bestCandidate,
+  relevance,
+  RELEVANCE_MIN,
+  scoreCandidate,
+  type LyricsCandidate,
+} from "@/lib/lyrics/score";
 import type { Lyrics } from "@/lib/lyrics/types";
 
 export type LyricsSource =
@@ -17,24 +28,16 @@ export type LyricsSource =
   | "genius";
 
 /**
- * Auto-pick preference order — same as YTMLite's `lyrics/sources.ts`.
+ * Auto-pick preference order.
  *
- * YouTube Music leads because it is the only source that needs no
- * matching step: its lyrics are addressed by the exact videoId being
- * played, so it can never return a different song. Everything after it
- * has to search and then guess.
+ * YouTube Music leads because it is the only source that needs no matching
+ * step at all: its lyrics are addressed by the exact videoId being played,
+ * so it can never return a different song. Everything after it has to
+ * search and then guess, which is what the scorer in `score.ts` exists to
+ * arbitrate.
  *
  * The rest lead with the Chinese services because LRCLIB, Musixmatch and
- * Genius cover Mandarin and Cantonese catalogues poorly. Ordering them
- * ahead of the western ones is safe because every searching source
- * verifies its hit against the requested title/artist (`hitMatches`) and
- * returns null rather than a confidently-wrong different song, so a
- * track they don't carry simply falls through.
- *
- * This is a *preference* order, not a strict one: a source earlier in
- * the list only wins over a later one at the same quality level — any
- * timed source beats any plain source, because the karaoke stage is
- * built around line highlighting.
+ * Genius cover Mandarin and Cantonese catalogues poorly.
  */
 export const SOURCE_ORDER: LyricsSource[] = [
   "ytmusic",
@@ -55,6 +58,21 @@ export const SOURCE_LABELS: Record<LyricsSource, string> = {
   musixmatch: "Musixmatch",
   genius: "Genius",
 };
+
+/**
+ * The sources a free-text (artist, song) query can actually be run
+ * against — everything except YouTube Music, which has no such endpoint:
+ * it is addressed by videoId and nothing else. That is why the manual
+ * search covers exactly SIX sources.
+ */
+export const SEARCHABLE_SOURCES: LyricsSource[] = [
+  "kugou",
+  "qq",
+  "netease",
+  "lrclib",
+  "musixmatch",
+  "genius",
+];
 
 export type LyricsQueryParams = {
   videoId: string;
@@ -84,20 +102,183 @@ function fetchFor(source: LyricsSource, p: LyricsQueryParams): Promise<Lyrics | 
 }
 
 /**
- * Fire all 7 sources in parallel and auto-pick the best result, same
- * two-pass rule as YTMLite: the first source (in `SOURCE_ORDER`) with
- * *timed* lyrics wins; only if none have timed lyrics does the first
- * source with *plain* lyrics win. A source that errors or has nothing
- * simply falls through — never blocks or fails the others.
+ * How deep to search each source per tier, in the AUTOMATIC path.
+ *
+ * Carlyrics' `CANDIDATE_QUERY_LIMIT` (4) with its `{"QQ": 1}` override,
+ * for the same reasons: more candidates give the scorer more to choose
+ * between, but QQ over-returns unrelated same-title songs and rate-limits
+ * under rapid repeat queries, and Genius costs a full page scrape each.
  */
-export async function fetchBestLyrics(params: LyricsQueryParams): Promise<Lyrics | null> {
-  return pickBest(await fetchLyricsTiered(params));
+const AUTO_LIMITS: Partial<Record<LyricsSource, number>> = {
+  qq: 1,
+  genius: 2,
+};
+const AUTO_LIMIT_DEFAULT = 4;
+
+/** How deep a MANUAL search goes. Higher across the board: it happens once,
+ *  on purpose, and the user is waiting to look at the results — so breadth
+ *  matters more than latency, which is the opposite of the automatic
+ *  path's trade. */
+const MANUAL_LIMITS: Partial<Record<LyricsSource, number>> = {
+  qq: 3,
+  genius: 3,
+};
+const MANUAL_LIMIT_DEFAULT = 6;
+
+/** Search one source and return its candidates. Never throws — a source
+ *  that errors contributes nothing and cannot fail the sweep. */
+export async function searchSourceCandidates(
+  source: LyricsSource,
+  p: { title: string; artist?: string; album?: string; duration?: number },
+  limit: number,
+): Promise<LyricsCandidate[]> {
+  try {
+    switch (source) {
+      case "lrclib":
+        return await searchLrclibCandidates(
+          { title: p.title, artist: p.artist, album: p.album, duration: p.duration },
+          limit,
+        );
+      case "kugou":
+        return await searchKugouCandidates({ title: p.title, artist: p.artist }, limit);
+      case "netease":
+        return await searchNeteaseCandidates({ title: p.title, artist: p.artist }, limit);
+      case "musixmatch":
+        return await searchMusixmatchCandidates({ title: p.title, artist: p.artist }, limit);
+      case "qq":
+        return await searchQqCandidates({ title: p.title, artist: p.artist }, limit);
+      case "genius":
+        return await searchGeniusCandidates({ title: p.title, artist: p.artist }, limit);
+      case "ytmusic":
+        // Not searchable by name — see SEARCHABLE_SOURCES.
+        return [];
+    }
+  } catch {
+    return [];
+  }
 }
 
 /**
- * The auto-pick rule over an already-fetched per-source map: the first
- * source (in `SOURCE_ORDER`) with *timed* lyrics wins; only if none have
- * timed lyrics does the first with *plain* lyrics win.
+ * Search order, in tiers. Everything in a tier runs in parallel; tiers run
+ * one after another and stop as soon as a tier produces a candidate whose
+ * match score clears `ACCEPT_SCORE` (0.5).
+ *
+ * Why tiers rather than all seven at once: seven simultaneous HTTPS
+ * requests — several to servers on the other side of the world — plus
+ * seven parses is enough to make a Pi 5 visibly stutter, and six of those
+ * results are thrown away the moment YouTube Music answers. In the common
+ * case this makes exactly one request.
+ *
+ * YouTube Music is a tier of its own because it needs no matching step at
+ * all. The tiers after it pair a Chinese catalogue with a western one, so
+ * each tier can answer for either kind of track.
+ */
+export const SEARCH_TIERS: LyricsSource[][] = [
+  ["ytmusic"],
+  ["kugou", "lrclib"],
+  ["musixmatch", "netease"],
+  ["genius", "qq"],
+];
+
+/**
+ * The result of an automatic lookup: every candidate that was gathered,
+ * plus the winner and its score.
+ *
+ * The per-source map is what the picker binds to (so switching sources
+ * costs no network); `best` is what actually gets displayed.
+ */
+export type TieredResult = {
+  /** PARTIAL: sources in tiers that were never reached are absent, which
+   *  is deliberately distinct from present-and-`null` ("we asked, it had
+   *  nothing"). The picker relies on that difference — an unsearched
+   *  source is not a known-empty one, and is fetched on demand if tapped. */
+  sources: Partial<Record<LyricsSource, Lyrics | null>>;
+  /** The winning candidate's score, for logging and for the picker to
+   *  explain itself. Absent when nothing was found at all. */
+  bestScore?: number;
+};
+
+/**
+ * Walk `SEARCH_TIERS`, scoring every candidate from every source in the
+ * tier, and stop at the first tier whose best candidate clears 0.5.
+ *
+ * This is the behaviour change the user asked for, and it replaces a rule
+ * that was subtly wrong in two ways. The old walk stopped as soon as ANY
+ * source returned *timed* lyrics, and each source returned its own first
+ * `hitMatches`-approved hit. So a tier-2 source that confidently returned
+ * a synced lyric for the wrong song ended the search — the right answer in
+ * tier 3 was never requested, and nothing downstream could tell that what
+ * it had was wrong. Scoring makes "how good is this?" a number rather than
+ * a boolean, and 0.5 is the line below which we'd rather keep looking.
+ *
+ * A sub-threshold best is still KEPT, not discarded: if no tier clears the
+ * bar, the highest scorer overall is better than showing nothing, and the
+ * user can always override it from the picker.
+ */
+export async function fetchLyricsTiered(
+  params: LyricsQueryParams,
+): Promise<TieredResult> {
+  const sources: Partial<Record<LyricsSource, Lyrics | null>> = {};
+  let best: { candidate: LyricsCandidate; score: number } | null = null;
+  const artist = params.artist ?? "";
+
+  for (const tier of SEARCH_TIERS) {
+    const perSource = await Promise.all(
+      tier.map(async (source) => {
+        // YouTube Music is addressed by videoId, so it has exactly one
+        // possible answer and no candidate list to rank. Its result is
+        // pinned to a perfect title/artist match because, by construction,
+        // it IS the track being played.
+        if (source === "ytmusic") {
+          const l = await fetchFor("ytmusic", params).catch(() => null);
+          return {
+            source,
+            candidates: l
+              ? [
+                  {
+                    source: "ytmusic",
+                    title: params.title,
+                    artist,
+                    lyrics: l,
+                  } satisfies LyricsCandidate,
+                ]
+              : [],
+          };
+        }
+        return {
+          source,
+          candidates: await searchSourceCandidates(
+            source,
+            params,
+            AUTO_LIMITS[source] ?? AUTO_LIMIT_DEFAULT,
+          ),
+        };
+      }),
+    );
+
+    for (const { source, candidates } of perSource) {
+      // Each source's own best is what the picker shows for it. Recording
+      // `null` for an empty source is what marks it searched-and-empty.
+      const top = bestCandidate(candidates, params.title, artist);
+      sources[source] = top?.candidate.lyrics ?? null;
+      if (top && (!best || top.score > best.score)) best = top;
+    }
+
+    if (best && best.score >= ACCEPT_SCORE) break;
+  }
+
+  return { sources, bestScore: best?.score };
+}
+
+/**
+ * The auto-pick rule over an already-fetched per-source map.
+ *
+ * Preference order first (`SOURCE_ORDER`), quality second: any timed
+ * source beats any plain source, because the karaoke stage is built around
+ * line highlighting. Cross-source *scoring* has already happened inside
+ * `fetchLyricsTiered` — by the time a map reaches here each entry is
+ * already that source's best-scoring candidate, so this only has to choose
+ * between sources, not between hits.
  */
 export function pickBest(
   results: Partial<Record<LyricsSource, Lyrics | null>>,
@@ -111,63 +292,9 @@ export function pickBest(
   return null;
 }
 
-/**
- * Search order, in tiers. Everything in a tier runs in parallel; tiers run
- * one after another and stop as soon as something returns *timed* lyrics.
- *
- * Why not all seven at once, which is what this used to do: seven
- * simultaneous HTTPS requests — several to servers on the other side of
- * the world — plus seven JSON/LRC parses is enough to make a Pi 5 visibly
- * stutter, and six of those results were thrown away the moment YouTube
- * Music answered. In the common case this now makes exactly one request.
- *
- * YouTube Music leads alone because it needs no matching step: its lyrics
- * are addressed by the exact videoId being played, so it cannot return a
- * different song. Everything after it has to search and then guess, which
- * is why they're paired — two tries at a time is a reasonable trade
- * between latency and the odds of a hit.
- */
-export const SEARCH_TIERS: LyricsSource[][] = [
-  ["ytmusic"],
-  ["kugou", "lrclib"],
-  ["musixmatch", "netease"],
-  ["genius", "qq"],
-];
-
-/** Did this map already answer the question, i.e. hold timed lyrics? */
-function hasTimed(results: Partial<Record<LyricsSource, Lyrics | null>>): boolean {
-  return Object.values(results).some((l) => l?.kind === "timed");
-}
-
-/**
- * Walk `SEARCH_TIERS` until something returns timed lyrics.
- *
- * Returns a PARTIAL map: sources in tiers that were never reached are
- * absent, which is deliberately distinct from present-and-`null` ("we
- * asked, it had nothing"). The picker relies on that difference — an
- * unsearched source is not the same as one known to be empty, and is
- * fetched on demand if the user taps it.
- *
- * Plain lyrics do NOT stop the walk: YouTube Music very often has an
- * unsynced transcript, and stopping there would mean never finding the
- * synced version the karaoke stage exists for. They're kept, so if no tier
- * produces timed lyrics `pickBest` still falls back to them.
- */
-export async function fetchLyricsTiered(
-  params: LyricsQueryParams,
-): Promise<Partial<Record<LyricsSource, Lyrics | null>>> {
-  const out: Partial<Record<LyricsSource, Lyrics | null>> = {};
-
-  for (const tier of SEARCH_TIERS) {
-    const settled = await Promise.allSettled(tier.map((s) => fetchFor(s, params)));
-    tier.forEach((source, i) => {
-      const r = settled[i];
-      out[source] = r.status === "fulfilled" ? r.value : null;
-    });
-    if (hasTimed(out)) break;
-  }
-
-  return out;
+/** Fire the tiered search and return just the winner. */
+export async function fetchBestLyrics(params: LyricsQueryParams): Promise<Lyrics | null> {
+  return pickBest((await fetchLyricsTiered(params)).sources);
 }
 
 /** Fetch ONE source, for the picker's on-demand lookups. */
@@ -176,4 +303,56 @@ export function fetchOneLyricsSource(
   params: LyricsQueryParams,
 ): Promise<Lyrics | null> {
   return fetchFor(source, params).catch(() => null);
+}
+
+// ── Manual search ──────────────────────────────────────────────────────
+
+/** A manual-search result, ready to render: the candidate plus how well it
+ *  scored, so the results window can order and explain them. */
+export type ScoredCandidate = {
+  candidate: LyricsCandidate;
+  score: number;
+};
+
+/**
+ * Search all six searchable sources at once for a hand-typed (artist,
+ * song) and return every plausible result, best first.
+ *
+ * All six run CONCURRENTLY here rather than in tiers — the whole point of
+ * a manual search is to see everything at once and choose, so there is no
+ * "good enough, stop early" to exploit. The Pi-stutter argument that
+ * justifies tiering in the automatic path doesn't apply: this runs once,
+ * on an explicit tap, while the user is looking at a progress state.
+ *
+ * Obviously-unrelated hits are dropped (`RELEVANCE_MIN`) so the window
+ * offers plausible matches only — search engines happily return a
+ * same-named but entirely different song, and those are pure clutter in a
+ * list someone is reading in a car.
+ */
+export async function searchAllSources(
+  query: { title: string; artist?: string },
+  onProgress?: (done: number, total: number) => void,
+): Promise<ScoredCandidate[]> {
+  const artist = query.artist ?? "";
+  let done = 0;
+  const perSource = await Promise.all(
+    SEARCHABLE_SOURCES.map(async (source) => {
+      const c = await searchSourceCandidates(
+        source,
+        query,
+        MANUAL_LIMITS[source] ?? MANUAL_LIMIT_DEFAULT,
+      );
+      onProgress?.(++done, SEARCHABLE_SOURCES.length);
+      return c;
+    }),
+  );
+
+  return perSource
+    .flat()
+    .filter((c) => relevance(c, query.title, artist) >= RELEVANCE_MIN)
+    .map((candidate) => ({
+      candidate,
+      score: scoreCandidate(candidate, query.title, artist),
+    }))
+    .sort((a, b) => b.score - a.score);
 }

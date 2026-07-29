@@ -17,7 +17,9 @@ import { fetchArtist } from "@/lib/innertube/artist";
 import {
   fetchLyricsTiered,
   fetchOneLyricsSource,
+  searchAllSources,
   type LyricsSource,
+  type ScoredCandidate,
 } from "@/lib/lyrics/sources";
 import {
   fetchLibraryAlbums,
@@ -84,6 +86,17 @@ export type ContentCommand =
       artist?: string;
       album?: string;
       duration?: number;
+    }
+  /** A hand-typed (artist, song) query, from the karaoke stage's Search
+   *  Lyrics screen. Sweeps all six searchable sources and returns every
+   *  plausible hit for the user to choose from. `videoId` is the track the
+   *  results will be applied to, echoed back so a result arriving after a
+   *  track change can be dropped. */
+  | {
+      type: "lyrics:search";
+      videoId: string;
+      title: string;
+      artist?: string;
     };
 
 export type ContentEvent =
@@ -146,7 +159,14 @@ export type ContentEvent =
       source: LyricsSource;
       lyrics: Lyrics | null;
     }
-  | { type: "lyrics:error"; videoId: string; message: string };
+  | { type: "lyrics:error"; videoId: string; message: string }
+  /** Manual-search progress, so the screen can say "3 of 6" rather than
+   *  spin silently for as long as the slowest source takes. */
+  | { type: "lyrics:search:progress"; videoId: string; done: number; total: number }
+  /** Every plausible hit across the six searchable sources, best-scoring
+   *  first. Empty means the sweep ran and found nothing. */
+  | { type: "lyrics:search:results"; videoId: string; results: ScoredCandidate[] }
+  | { type: "lyrics:search:error"; videoId: string; message: string };
 
 // ── Pump: identical batching contract to the Rust-routed bus ──────────
 
@@ -367,10 +387,23 @@ async function handle(command: ContentCommand): Promise<void> {
     case "lyrics:load": {
       publish({ type: "lyrics:loading", videoId: command.videoId });
       try {
-        const sources = await fetchLyricsTiered(command);
+        const { sources } = await fetchLyricsTiered(command);
         publish({ type: "lyrics:loaded", videoId: command.videoId, sources });
       } catch (e) {
         publish({ type: "lyrics:error", videoId: command.videoId, message: errMessage(e) });
+      }
+      return;
+    }
+
+    case "lyrics:search": {
+      const { videoId, title, artist } = command;
+      try {
+        const results = await searchAllSources({ title, artist }, (done, total) =>
+          publish({ type: "lyrics:search:progress", videoId, done, total }),
+        );
+        publish({ type: "lyrics:search:results", videoId, results });
+      } catch (e) {
+        publish({ type: "lyrics:search:error", videoId, message: errMessage(e) });
       }
       return;
     }

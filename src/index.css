@@ -268,4 +268,86 @@
     mask-image: linear-gradient(to bottom, black 0%, black 20%, transparent 80%);
     -webkit-mask-image: linear-gradient(to bottom, black 0%, black 20%, transparent 80%);
   }
+
+  /* Seek slider — the player bar's progress control.
+     ------------------------------------------------------------------
+     A native <input type="range"> rather than the div-with-onClick this
+     replaced. That div could only be TAPPED: there was no thumb to grab,
+     no drag, and a 6px-tall hit strip meant landing on it at all was the
+     hard part on a touch panel. A range input brings dragging, keyboard
+     stepping and a real thumb for free, and is what the volume slider
+     already is — so the two now behave the same way, as they should.
+
+     The sizing trick: the INPUT is tall (its full height is the touch
+     target) while the visible track stays thin, and the thumb is drawn
+     much larger than the track. So there is a ~36px band to put a
+     fingertip in, and only a 6px line to look at.
+
+     `--pct` is set inline from the current position; the filled portion
+     is painted with a hard-stop gradient rather than `accent-color`,
+     because accent-color cannot express "filled up to here" on its own.
+     The thumb keeps a white centre with a brand ring, matching the
+     volume slider's look at a larger size. */
+  .seek-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+    /* Vertical padding is hit area, not decoration — see above. */
+    padding-block: 0.9375rem;
+  }
+  .seek-slider:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+  .seek-slider::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 9999px;
+    background: linear-gradient(
+      to right,
+      var(--brand) 0%,
+      var(--brand) var(--pct, 0%),
+      rgb(255 255 255 / 0.2) var(--pct, 0%),
+      rgb(255 255 255 / 0.2) 100%
+    );
+  }
+  .seek-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 9999px;
+    background: #fff;
+    border: 3px solid var(--brand);
+    /* Centre a 20px thumb on a 6px track: (6 - 20) / 2. */
+    margin-top: -7px;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+    transition: transform 120ms ease-out;
+  }
+  /* Grows under the finger, so the thumb is not hidden by the fingertip
+     that is dragging it. */
+  .seek-slider:active::-webkit-slider-thumb {
+    transform: scale(1.25);
+  }
+  .seek-slider:disabled::-webkit-slider-thumb {
+    background: rgb(255 255 255 / 0.4);
+    border-color: rgb(255 255 255 / 0.2);
+  }
+  .seek-slider::-moz-range-track {
+    height: 6px;
+    border-radius: 9999px;
+    background: rgb(255 255 255 / 0.2);
+  }
+  .seek-slider::-moz-range-progress {
+    height: 6px;
+    border-radius: 9999px;
+    background: var(--brand);
+  }
+  .seek-slider::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 9999px;
+    background: #fff;
+    border: 3px solid var(--brand);
+  }
 }
