@@ -38,6 +38,30 @@ const PLAY_BTN = "size-[clamp(4.5rem,21vh,5.5rem)] shrink-0";
 const PLAY_GLYPH = "size-[clamp(2.25rem,9vh,2.75rem)]";
 const BTN_GAP = "gap-[clamp(0.75rem,2.5vw,2rem)]";
 
+/**
+ * Extra hit box for the five small transport controls — Like, Shuffle,
+ * Previous, Next, Repeat — the ones a moving car makes you stab at.
+ *
+ * Added as an overflowing pseudo-element rather than a bigger button,
+ * because the box is also the visual: these controls have no background,
+ * so growing `size-*` would move every glyph in the row and change the
+ * spacing the user's hand has already learned. A `::before` costs no
+ * layout at all — the icons stay exactly where they are, and only the
+ * area that answers a tap grows.
+ *
+ * The horizontal figure is deliberately under half of `BTN_GAP` at every
+ * clamp stop (1vw against 2.5vw, and both ends likewise), so two
+ * neighbouring targets can never meet however the panel is sized. That
+ * remaining sliver is worth keeping: between two expanded boxes, a tap
+ * that lands in the middle should do nothing rather than the wrong thing.
+ * On the 1920px panel this is 64px → 88x88, with 8px of dead space left.
+ *
+ * Only the transport row gets it. The utility cluster on the right sits
+ * on a 4–12px gap with nothing to take.
+ */
+const TAP_EXPAND =
+  "relative before:absolute before:inset-x-[calc(clamp(0.25rem,1vw,0.75rem)*-1)] before:inset-y-[calc(clamp(0.25rem,1.5vh,0.75rem)*-1)] before:content-['']";
+
 const LYRIC_FONT = "clamp(1.75rem,15vh,3.75rem)";
 const LYRIC_GAP = "clamp(0.3rem,1.8vh,0.9rem)";
 const CHROME_MS = 5000;
@@ -304,18 +328,18 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
           matter how many utility controls sit beside it. */}
       <div className="relative shrink-0 px-6 pb-[clamp(0.5rem,2.5vh,1.25rem)]">
         <div className={cn("flex items-center justify-center", BTN_GAP)}>
-          <LikeButton track={track} className={SECONDARY_BTN} />
+          <LikeButton track={track} className={cn(SECONDARY_BTN, TAP_EXPAND)} />
           <button
             type="button"
             aria-label="Shuffle"
             aria-pressed={shuffle}
             onClick={() => setShuffle(!shuffle)}
-            className={cn(SECONDARY_BTN, shuffle && "text-brand")}
+            className={cn(SECONDARY_BTN, TAP_EXPAND, shuffle && "text-brand")}
           >
             <ShuffleIcon />
           </button>
 
-          <button type="button" aria-label="Previous" onClick={prev} disabled={!hasTrack} className={SECONDARY_BTN}>
+          <button type="button" aria-label="Previous" onClick={prev} disabled={!hasTrack} className={cn(SECONDARY_BTN, TAP_EXPAND)}>
             <SkipBackIcon className="fill-current" />
           </button>
           <button
@@ -333,7 +357,7 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
               <PlayIcon className={cn(PLAY_GLYPH, "fill-current")} />
             )}
           </button>
-          <button type="button" aria-label="Next" onClick={next} disabled={!hasTrack} className={SECONDARY_BTN}>
+          <button type="button" aria-label="Next" onClick={next} disabled={!hasTrack} className={cn(SECONDARY_BTN, TAP_EXPAND)}>
             <SkipForwardIcon className="fill-current" />
           </button>
           <button
@@ -341,7 +365,7 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
             aria-label={repeatLabel(repeat)}
             aria-pressed={repeat !== "off"}
             onClick={cycleRepeat}
-            className={cn(SECONDARY_BTN, repeat !== "off" && "text-brand")}
+            className={cn(SECONDARY_BTN, TAP_EXPAND, repeat !== "off" && "text-brand")}
           >
             {repeat === "one" ? <Repeat1Icon /> : <RepeatIcon />}
           </button>

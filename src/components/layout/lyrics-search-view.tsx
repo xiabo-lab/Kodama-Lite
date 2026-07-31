@@ -396,6 +396,18 @@ function ResultsView({
   const error = useLyricsStore((s) => s.searchError);
   const pickManual = useLyricsStore((s) => s.pickManual);
 
+  // The playing song's own length, shown in the same m:ss form as each
+  // result's. That is the comparison being made when scanning this list —
+  // a lyric that runs 2:10 against a 4:30 song is the wrong song, whatever
+  // its title says — and it only works if the number to compare against is
+  // on screen. Live duration first, since the queue's metadata figure can
+  // be missing or a rounded guess.
+  const playingDuration = usePlaybackStore((s) => s.duration);
+  const queue = usePlaybackStore((s) => s.queue);
+  const index = usePlaybackStore((s) => s.index);
+  const trackDuration = index >= 0 ? queue[index]?.duration : undefined;
+  const songLength = formatClock(playingDuration || trackDuration);
+
   const [page, setPage] = useState(0);
   const pageCount = Math.max(1, Math.ceil(results.length / RESULTS_PER_PAGE));
   const shown = Math.min(page, pageCount - 1);
@@ -422,6 +434,7 @@ function ResultsView({
         </button>
         <span className="min-w-0 flex-1 truncate text-lg text-muted-foreground">
           {query.artist ? `${query.artist} — ${query.title}` : query.title}
+          {songLength ? ` · ${songLength}` : ""}
           {results.length > 0 ? ` · ${results.length} result${results.length === 1 ? "" : "s"}` : ""}
         </span>
         {pageCount > 1 ? (
@@ -531,9 +544,15 @@ function describeLength(lyrics: Lyrics): string {
   }
   const last = lyrics.lines[lyrics.lines.length - 1];
   const end = last?.end ?? last?.start ?? 0;
-  if (!Number.isFinite(end) || end <= 0) return `${lyrics.lines.length} lines`;
-  const m = Math.floor(end / 60);
-  const s = Math.floor(end % 60);
+  return formatClock(end) ?? `${lyrics.lines.length} lines`;
+}
+
+/** Seconds as `m:ss`, or null when there is no usable figure — so callers
+ *  can fall back rather than print "0:00" for "we don't know yet". */
+function formatClock(seconds: number | undefined): string | null {
+  if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return null;
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 

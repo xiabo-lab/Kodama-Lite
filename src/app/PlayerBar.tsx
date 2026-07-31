@@ -28,6 +28,35 @@ import { cn } from "@/lib/utils";
  */
 const ICON_BTN = "text-muted-foreground transition-colors hover:text-foreground";
 
+/**
+ * Extra hit box for the five small transport controls — Like, Shuffle,
+ * Previous, Next, Repeat. Same technique and the same reason as
+ * `TAP_EXPAND` on the karaoke stage: these buttons are sized by the glyph
+ * inside them (40px, no padding, no background), so the box IS the
+ * picture. Growing it would move every icon in the row; an overflowing
+ * `::before` costs no layout at all, and only the area that answers a tap
+ * changes.
+ *
+ * The horizontal figure has to track the row's gap, which is not a
+ * constant here — `justify-between` spreads eight children across
+ * whatever is left, so the gap measures 101px at 1920 (the panel), 67 at
+ * 1600, 45 at 1400 and 32 at 1280, i.e. very close to
+ * `(width - 983px) / 9.3`. Dividing by 28 instead of 9.3 keeps the pair of
+ * expanded boxes inside about two-thirds of the gap at every width, so
+ * neighbours never meet and the sliver between them stays dead — a tap
+ * that lands there should do nothing rather than the wrong thing. The
+ * 2rem cap stops the target growing absurdly wide on a desktop window.
+ *
+ * Vertically it is a flat 1rem, which takes the target to exactly the
+ * height of the Play button beside it and still leaves 6px above the seek
+ * slider on the row below. That slider is a real control — overlapping it
+ * would steal drags from it.
+ *
+ * On the 1920px panel this is 40x40 → 104x72.
+ */
+const TAP_EXPAND =
+  "relative before:absolute before:inset-x-[calc(clamp(0.375rem,calc((100vw-62rem)/28),2rem)*-1)] before:inset-y-[-1rem] before:content-['']";
+
 export function PlayerBar() {
   const queue = usePlaybackStore((s) => s.queue);
   const index = usePlaybackStore((s) => s.index);
@@ -155,10 +184,10 @@ export function PlayerBar() {
               before. */}
           <LikeButton
             track={track}
-            className={cn(ICON_BTN, "disabled:opacity-40 [&_svg]:size-10")}
+            className={cn(ICON_BTN, TAP_EXPAND, "disabled:opacity-40 [&_svg]:size-10")}
           />
           <button
-            className={cn(ICON_BTN, shuffle && "text-brand")}
+            className={cn(ICON_BTN, TAP_EXPAND, shuffle && "text-brand")}
             aria-label="Shuffle"
             aria-pressed={shuffle}
             onClick={() => setShuffle(!shuffle)}
@@ -166,7 +195,7 @@ export function PlayerBar() {
             <ShuffleIcon className="size-10" />
           </button>
           <button
-            className={ICON_BTN}
+            className={cn(ICON_BTN, TAP_EXPAND)}
             aria-label="Previous"
             disabled={!hasTrack}
             onClick={prev}
@@ -188,7 +217,7 @@ export function PlayerBar() {
             )}
           </button>
           <button
-            className={ICON_BTN}
+            className={cn(ICON_BTN, TAP_EXPAND)}
             aria-label="Next"
             disabled={!hasTrack}
             onClick={next}
@@ -196,7 +225,7 @@ export function PlayerBar() {
             <SkipForwardIcon className="size-10 fill-current" />
           </button>
           <button
-            className={cn(ICON_BTN, repeat !== "off" && "text-brand")}
+            className={cn(ICON_BTN, TAP_EXPAND, repeat !== "off" && "text-brand")}
             aria-label={`Repeat: ${repeat}`}
             aria-pressed={repeat !== "off"}
             onClick={cycleRepeat}
