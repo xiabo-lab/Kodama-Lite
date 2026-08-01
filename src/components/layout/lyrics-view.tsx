@@ -236,8 +236,10 @@ function WordLine({ words, offsetSec }: { words: TimedWord[]; offsetSec: number 
 //     second, so the intro isn't a blank screen and you know when to come
 //     in.
 
-/** Context lines are 0.61x the current line — Carlyrics' 34px against 56. */
-const CONTEXT_SCALE = 0.61;
+// Context lines used to be a fixed 0.61x the current line (Carlyrics' 34px
+// against 56). They are now sized independently in Settings → Appearance →
+// Font settings; that ratio survives as the shipped default (35px against
+// 60) in `settingsStore`'s DEFAULT_LYRIC_STYLE.
 /** Carlyrics shows at most 3 countdown dots (1 dot = 1 second). */
 const INTRO_DOTS_MAX = 3;
 
@@ -346,14 +348,20 @@ function KaraokeLine({
 
   return (
     <span className="relative inline-block">
-      {/* Unsung: dimmed white. Carlyrics has this the other way round
-          (unsung yellow, sung white), which works on its display but puts
-          a whole line of fully-saturated colour on screen as the RESTING
-          state — at 3.75rem of CJK on a dark panel that is a lot of red to
-          read past. Dim white resting, brand red sweeping, means the
-          colour marks exactly where you are rather than where you aren't,
-          which is the question the line is being read to answer. */}
-      <span ref={baseRef} className="whitespace-pre text-foreground/35">
+      {/* Unsung, then sung. Carlyrics has this the other way round (unsung
+          yellow, sung white), which works on its display but puts a whole
+          line of fully-saturated colour on screen as the RESTING state — at
+          60px of CJK on a dark panel that is a lot to read past. Dim
+          resting, brand red sweeping, means the colour marks exactly where
+          you are rather than where you aren't, which is the question the
+          line is being read to answer. Both colours are now Settings →
+          Appearance → Font settings (defaults preserve that reasoning);
+          swapping them back is two taps for anyone who prefers it. */}
+      <span
+        ref={baseRef}
+        className="whitespace-pre"
+        style={{ color: "var(--lyric-color-current)" }}
+      >
         {content}
       </span>
       {/* Sung — same markup, same box, clipped from the right. `inset-0`
@@ -363,8 +371,11 @@ function KaraokeLine({
       <span
         ref={fillRef}
         aria-hidden
-        className="absolute inset-0 whitespace-pre text-brand"
-        style={{ clipPath: "inset(0 100% 0 0)" }}
+        className="absolute inset-0 whitespace-pre"
+        style={{
+          clipPath: "inset(0 100% 0 0)",
+          color: "var(--lyric-color-karaoke)",
+        }}
       >
         {content}
       </span>
@@ -394,13 +405,27 @@ function StageLyrics({ lines }: { lines: TimedLine[] }) {
       <StageFrame
         above={
           dots > 0 ? (
-            <span className="tracking-[0.4em] text-brand">
+            <span
+              className="tracking-[0.4em]"
+              style={{ color: "var(--lyric-color-karaoke)" }}
+            >
               {"•".repeat(dots)}
             </span>
           ) : null
         }
-        current={<span className="text-brand">{first?.text || "♪"}</span>}
-        below={<span className="text-muted-foreground/70">{lines[1]?.text ?? ""}</span>}
+        // The line about to become active, shown in the sweep colour —
+        // it's the one thing on the stage that is "current" during the
+        // intro, and it must not move when it actually becomes so.
+        current={
+          <span style={{ color: "var(--lyric-color-karaoke)" }}>
+            {first?.text || "♪"}
+          </span>
+        }
+        below={
+          <span style={{ color: "var(--lyric-color-bottom)" }}>
+            {lines[1]?.text ?? ""}
+          </span>
+        }
       />
     );
   }
@@ -413,7 +438,7 @@ function StageLyrics({ lines }: { lines: TimedLine[] }) {
     <StageFrame
       above={
         prev ? (
-          <span className="text-muted-foreground/60">{prev.text}</span>
+          <span style={{ color: "var(--lyric-color-top)" }}>{prev.text}</span>
         ) : null
       }
       current={
@@ -429,7 +454,7 @@ function StageLyrics({ lines }: { lines: TimedLine[] }) {
       }
       below={
         next ? (
-          <span className="text-muted-foreground/70">{next.text}</span>
+          <span style={{ color: "var(--lyric-color-bottom)" }}>{next.text}</span>
         ) : null
       }
     />
@@ -457,23 +482,19 @@ function StageFrame({
 }) {
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-[var(--lyric-gap,0.5rem)] px-8">
-      <Row scale={CONTEXT_SCALE}>{above}</Row>
-      <Row scale={1} bold>
-        {current}
-      </Row>
-      <Row scale={CONTEXT_SCALE}>{below}</Row>
+      <Row slot="top">{above}</Row>
+      <Row slot="current">{current}</Row>
+      <Row slot="bottom">{below}</Row>
     </div>
   );
 }
 
 function Row({
   children,
-  scale,
-  bold,
+  slot,
 }: {
   children: React.ReactNode;
-  scale: number;
-  bold?: boolean;
+  slot: "top" | "current" | "bottom";
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
@@ -498,15 +519,17 @@ function Row({
       ref={ref}
       className="flex w-full shrink-0 items-center justify-center overflow-hidden"
       style={{
-        fontSize: `calc(var(--lyric-font) * ${scale})`,
+        fontSize: `var(--lyric-size-${slot})`,
         lineHeight: STAGE_LEADING,
-        height: `calc(var(--lyric-font) * ${scale} * ${STAGE_LEADING})`,
+        // Reserved from the slot's own size, not the current line's: each
+        // row has to hold its height whether or not it has text in it, or
+        // a missing context line would let the current line drift off
+        // centre — the one thing this layout exists to prevent.
+        height: `calc(var(--lyric-size-${slot}) * ${STAGE_LEADING})`,
+        fontWeight: `var(--lyric-weight-${slot})`,
       }}
     >
-      <div
-        ref={inner}
-        className={cn("whitespace-nowrap", bold ? "font-[650]" : "font-medium")}
-      >
+      <div ref={inner} className="whitespace-nowrap">
         {children}
       </div>
     </div>

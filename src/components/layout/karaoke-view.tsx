@@ -22,6 +22,11 @@ import {
 } from "@/components/layout/lyrics-source-picker";
 import { QueueButton, QueuePanel } from "@/components/layout/queue-panel";
 import { useQueuePanelStore } from "@/store/queuePanelStore";
+import {
+  lyricColorCss,
+  useSettingsStore,
+  type LyricStyle,
+} from "@/store/settingsStore";
 import { cn } from "@/lib/utils";
 
 // Plain `vite dev` in a browser has no Tauri backend; `getCurrentWindow()`
@@ -62,8 +67,36 @@ const BTN_GAP = "gap-[clamp(0.75rem,2.5vw,2rem)]";
 const TAP_EXPAND =
   "relative before:absolute before:inset-x-[calc(clamp(0.25rem,1vw,0.75rem)*-1)] before:inset-y-[calc(clamp(0.25rem,1.5vh,0.75rem)*-1)] before:content-['']";
 
-const LYRIC_FONT = "clamp(1.75rem,15vh,3.75rem)";
 const LYRIC_GAP = "clamp(0.3rem,1.8vh,0.9rem)";
+
+/**
+ * Settings → Appearance → Font settings, handed to the stage as custom
+ * properties. Passing them down the DOM rather than through props keeps
+ * `lyrics-view`'s slot components free of store reads — they already take
+ * their geometry from `--lyric-*`, and this is the same channel.
+ *
+ * `--lyric-font` is kept, aliased to the current line's size: the stage's
+ * *scrolling* branch (an unsynced transcript, which has no three-slot
+ * layout to configure) still sizes itself from it.
+ */
+function lyricStyleVars(s: LyricStyle): React.CSSProperties {
+  return {
+    "--lyric-gap": LYRIC_GAP,
+    "--lyric-font": `${s.current.size}px`,
+    "--lyric-size-top": `${s.top.size}px`,
+    "--lyric-size-current": `${s.current.size}px`,
+    "--lyric-size-bottom": `${s.bottom.size}px`,
+    "--lyric-color-top": lyricColorCss(s.top.color),
+    "--lyric-color-current": lyricColorCss(s.current.color),
+    "--lyric-color-bottom": lyricColorCss(s.bottom.color),
+    "--lyric-color-karaoke": lyricColorCss(s.karaoke),
+    // 650 / 500 are the weights the stage hardcoded before this setting
+    // existed, so Bold-on and Bold-off reproduce the two looks it had.
+    "--lyric-weight-top": s.top.bold ? 650 : 500,
+    "--lyric-weight-current": s.current.bold ? 650 : 500,
+    "--lyric-weight-bottom": s.bottom.bold ? 650 : 500,
+  } as React.CSSProperties;
+}
 const CHROME_MS = 5000;
 
 /**
@@ -176,6 +209,7 @@ export function KaraokeView() {
 }
 
 function KaraokeStage({ onClose }: { onClose: () => void }) {
+  const lyricStyle = useSettingsStore((s) => s.lyricStyle);
   const queue = usePlaybackStore((s) => s.queue);
   const index = usePlaybackStore((s) => s.index);
   const playing = usePlaybackStore((s) => s.playing);
@@ -309,7 +343,7 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
           // the wrong width with the panel already closed.
           panelOpen && "pr-[640px]",
         )}
-        style={{ "--lyric-font": LYRIC_FONT, "--lyric-gap": LYRIC_GAP } as React.CSSProperties}
+        style={lyricStyleVars(lyricStyle)}
       >
         {/* Full height, unconditionally. This used to be capped to exactly
             three lines' worth for a timed sheet, because the stage was a

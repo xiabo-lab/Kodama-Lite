@@ -1,0 +1,5 @@
+# Shell scripts must keep LF endings even when checked out on Windows.
+# These are written here and run on the Pi; a CRLF checkout copied straight
+# to the device fails with `bad interpreter: /usr/bin/env bash^M`, which
+# reads as a missing interpreter rather than a line-ending problem.
+*.sh text eol=lf

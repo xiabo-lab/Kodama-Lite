@@ -12,6 +12,7 @@ import {
   RotateCcwIcon,
   TimerIcon,
   Trash2Icon,
+  TypeIcon,
   UserRoundIcon,
   WifiIcon,
   WifiOffIcon,
@@ -23,6 +24,7 @@ import {
   SettingRow,
   Switch,
 } from "@/components/settings/primitives";
+import { FontSettings } from "@/components/settings/font-settings";
 import { dispatch } from "@/bus/bus";
 import { useAppStore } from "@/store/appStore";
 import { useSettingsStore, type ThemeMode } from "@/store/settingsStore";
@@ -222,6 +224,7 @@ function AccountSection() {
 function AppearanceSection() {
   const theme = useSettingsStore((s) => s.theme);
   const setTheme = useSettingsStore((s) => s.setTheme);
+  const [fontOpen, setFontOpen] = useState(false);
   return (
     <>
       <SectionTitle>Appearance</SectionTitle>
@@ -239,7 +242,27 @@ function AppearanceSection() {
             />
           }
         />
+        {/* Opens over the whole screen rather than expanding in place: it
+            carries four rows of sliders and swatches, which is more than
+            this list can hold without pushing everything below it out of
+            reach. Same treatment as the lyrics search view. */}
+        <SettingRow
+          icon={TypeIcon}
+          title="Font settings"
+          description="Size, colour and weight for each line of the karaoke stage — the top and bottom context lines, the current line, and the colour that sweeps across the words as they're sung."
+          control={
+            <button
+              type="button"
+              onClick={() => setFontOpen(true)}
+              className="flex min-h-11 shrink-0 items-center gap-2 rounded-md border border-input px-4 text-sm font-medium transition-colors hover:bg-accent"
+            >
+              <TypeIcon className="size-4" />
+              Font settings
+            </button>
+          }
+        />
       </Group>
+      {fontOpen ? <FontSettings onClose={() => setFontOpen(false)} /> : null}
     </>
   );
 }
