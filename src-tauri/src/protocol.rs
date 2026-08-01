@@ -129,6 +129,23 @@ pub enum AppEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         position: Option<f64>,
     },
+    /// A command from the local control endpoint — the voice assistant.
+    ///
+    /// Deliberately shaped like `media:control`, and handled the same way:
+    /// the view plane routes it into the very same store actions the
+    /// on-screen controls call, so a spoken "shuffle on" and a tap on the
+    /// shuffle button cannot drift apart. What MPRIS already covers
+    /// (play/pause/next/previous/stop/seek) is *not* duplicated here — that
+    /// path works without this endpoint existing at all.
+    ///
+    /// `argument` is free text whose meaning depends on the action: a song
+    /// to search for, a volume percentage, "on"/"off".
+    #[serde(rename = "control:command")]
+    ControlCommand {
+        action: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        argument: Option<String>,
+    },
     #[serde(rename = "cache:stats")]
     CacheStatsReport {
         count: u64,

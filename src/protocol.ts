@@ -101,6 +101,29 @@ export type AppEvent =
       action: "play" | "pause" | "toggle" | "next" | "previous" | "stop" | "seek";
       position?: number;
     }
+  /** A command from the local control endpoint — the voice assistant.
+   *
+   *  Shaped like `media:control` on purpose, and handled the same way: it
+   *  drives the very same store actions the on-screen controls do, so a
+   *  spoken "shuffle on" and a tap on the shuffle button cannot drift
+   *  apart. Transport verbs are absent because MPRIS already carries them.
+   *
+   *  `argument` is free text whose meaning depends on the action — a song
+   *  to search for, a volume percentage, "on"/"off". */
+  | {
+      type: "control:command";
+      action:
+        | "play"
+        | "search"
+        | "volume"
+        | "shuffle"
+        | "repeat"
+        | "like"
+        | "lyrics"
+        | "karaoke"
+        | "quit";
+      argument?: string;
+    }
   | { type: "cache:stats"; count: number; bytes: number; dir: string }
   /** The real output volume, linear 0..1. `available: false` means there is
    *  no mixer to talk to — no audio stream yet, or no `pw-dump`/`wpctl`, as

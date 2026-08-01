@@ -2,6 +2,7 @@ import { useCallback, useEffect } from "react";
 import { dispatch, startBus } from "@/bus/bus";
 import type { AppEvent } from "@/protocol";
 import { startContentBus, dispatchContent, type ContentEvent } from "@/lib/network";
+import { handleControlCommand } from "@/lib/voiceControl";
 import { useAppStore } from "@/store/appStore";
 import { useAuthStore } from "@/store/authStore";
 import { useCacheStore } from "@/store/cacheStore";
@@ -39,6 +40,13 @@ export default function App() {
     useCacheStore.getState().applyEvents(events);
     usePlaybackStore.getState().applyEvents(events);
     useLocalStore.getState().applyEvents(events);
+    // Voice commands are not a store — most of them span several — so they
+    // are handled here rather than being fanned out like the rest. See
+    // `lib/voiceControl.ts`; every branch calls the same store action the
+    // on-screen control does.
+    for (const event of events) {
+      if (event.type === "control:command") handleControlCommand(event);
+    }
   }, []);
 
   const applyContentEvents = useCallback((events: ContentEvent[]) => {

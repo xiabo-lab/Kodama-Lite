@@ -25,8 +25,8 @@ use axum::{
     extract::{Path, Request, State as AxumState},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
-    Router,
+    routing::{get, post},
+    Json, Router,
 };
 /// `state()` is an extension-trait method on `AppHandle` — needed for the
 /// local-file index lookup in `local_handler`.
@@ -265,6 +265,10 @@ pub async fn run(server: StreamServer, ready_tx: watch::Sender<Option<String>>) 
         // same `ServeFile` Range handling — the only difference is that the
         // bytes are already on disk and there is nothing to download.
         .route("/local/:local_id", get(local_handler))
+        // The voice assistant's way in. Behind the same per-launch token as
+        // everything else here, so knowing the port is still not enough to
+        // drive the player.
+        .route("/control", post(control_handler))
         .with_state(server);
     let app_router = Router::new()
         .nest(&format!("/{token}"), routes)
@@ -286,11 +290,86 @@ pub async fn run(server: StreamServer, ready_tx: watch::Sender<Option<String>>) 
         }
     };
     eprintln!("[stream-server] listening on 127.0.0.1:{port}");
-    let _ = ready_tx.send(Some(format!("http://127.0.0.1:{port}/{token}")));
+    let base = format!("http://127.0.0.1:{port}/{token}");
+    publish_control_endpoint(&base);
+    let _ = ready_tx.send(Some(base));
 
     if let Err(e) = axum::serve(listener, app_router).await {
         eprintln!("[stream-server] serve error: {e}");
     }
+}
+
+/// One command from the voice assistant.
+#[derive(serde::Deserialize)]
+struct ControlRequest {
+    action: String,
+    #[serde(default)]
+    argument: Option<String>,
+}
+
+/// `POST /<token>/control` — hand a command to the view plane.
+///
+/// Returns as soon as the event is on the bus rather than waiting for the
+/// UI to act on it. The assistant is speaking its confirmation at the same
+/// moment this returns, and blocking here would put the whole round trip
+/// inside its latency budget for no benefit — nothing it could do with a
+/// failure that it cannot do with the player's state a moment later.
+async fn control_handler(
+    AxumState(server): AxumState<StreamServer>,
+    Json(req): Json<ControlRequest>,
+) -> Response {
+    eprintln!(
+        "[control] {} {}",
+        req.action,
+        req.argument.as_deref().unwrap_or("")
+    );
+    emit(
+        &server.app,
+        AppEvent::ControlCommand {
+            action: req.action,
+            argument: req.argument,
+        },
+    );
+    StatusCode::ACCEPTED.into_response()
+}
+
+/// Write the control endpoint where a local helper can find it.
+///
+/// The server binds port 0 and namespaces every route under a random
+/// per-launch token, precisely so that knowing the port is not enough to
+/// drive the app. That also means an external controller cannot guess the
+/// URL — so it is written to a file only this user can read, which keeps
+/// the token model intact while making the endpoint discoverable to a
+/// process already running as the same user. A fixed unauthenticated port
+/// would have been simpler and would have thrown that property away.
+///
+/// Best-effort: a failure here costs voice control, not playback.
+fn publish_control_endpoint(base: &str) {
+    let Some(home) = std::env::var_os("HOME") else {
+        eprintln!("[control] no HOME; not publishing the control endpoint");
+        return;
+    };
+    let dir = PathBuf::from(home).join(".local/state/kodama-lite");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("[control] mkdir {dir:?}: {e}");
+        return;
+    }
+    let path = dir.join("control.json");
+    let body = format!("{{\"url\":\"{base}/control\",\"pid\":{}}}\n", std::process::id());
+    if let Err(e) = std::fs::write(&path, body) {
+        eprintln!("[control] write {path:?}: {e}");
+        return;
+    }
+    // The token is a capability: anything that can read this file can drive
+    // the player, so it is owner-only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)) {
+            eprintln!("[control] chmod {path:?}: {e}");
+        }
+    }
+    eprintln!("[control] endpoint published at {path:?}");
 }
 
 /// Spawn a yt-dlp downloader that pipes stdout straight into a
