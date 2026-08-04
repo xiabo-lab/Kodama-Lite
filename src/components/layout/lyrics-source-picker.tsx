@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { CheckIcon, MicVocalIcon, SearchIcon } from "lucide-react";
 import { SEARCH_TIERS, SOURCE_LABELS } from "@/lib/lyrics/sources";
 import { LyricsSearchView } from "@/components/layout/lyrics-search-view";
+import { useKaraokeStore } from "@/store/karaokeStore";
 import { useLyricsStore, type SourceChoice } from "@/store/lyricsStore";
 import { cn } from "@/lib/utils";
 
@@ -17,7 +18,6 @@ import { cn } from "@/lib/utils";
 export function LyricsSearchButton({
   className,
   boxClassName,
-  onOpenChange,
   disabled = false,
 }: {
   /** The HIT AREA — sizing and positioning of the tappable region. */
@@ -26,19 +26,17 @@ export function LyricsSearchButton({
    *  itself at whatever `className` sizes it to; supplied, the target can
    *  be far larger than the thing you see. See `ConfirmLyricsButton`. */
   boxClassName?: string;
-  /** Told whenever the full-screen search opens or closes, so the karaoke
-   *  stage can keep its lyrics column narrowed while it is up. */
-  onOpenChange?: (open: boolean) => void;
   disabled?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  // Open state lives in `karaokeStore`, not here. The stage needs to read it
+  // (it narrows its lyrics column while the screen is up) and so does
+  // `voiceControl`, which may only reach the app through the same store
+  // action a tap goes through. A local `useState` could serve neither.
+  const open = useKaraokeStore((s) => s.searchOpen);
+  const setOpen = useKaraokeStore((s) => s.setSearchOpen);
   // A cached result set is a state worth advertising: it means reopening
   // this costs nothing and goes straight back to the list.
   const hasResults = useLyricsStore((s) => s.searchResults.length > 0);
-
-  useEffect(() => {
-    onOpenChange?.(open);
-  }, [open, onOpenChange]);
 
   return (
     <>

@@ -120,6 +120,15 @@ export type AppEvent =
         | "repeat"
         | "like"
         | "lyrics"
+        /** Re-run the lyrics lookup for the current track and show the
+         *  Search Lyrics screen — the karaoke stage's magnifier button.
+         *  Distinct from `lyrics`, which only displays what is already
+         *  found; these are two different buttons and two different
+         *  spoken commands. */
+        | "lyrics_search"
+        /** Commit the lyric on screen to the persistent cache — the green
+         *  tick on the karaoke stage. */
+        | "lyrics_save"
         | "karaoke"
         | "quit";
       argument?: string;

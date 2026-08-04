@@ -249,6 +249,39 @@ export function handleControlCommand(event: ControlCommand): void {
       return;
     }
 
+    case "lyrics_search": {
+      const track = currentTrack();
+      if (!track) return;
+      const karaoke = useKaraokeStore.getState();
+      // The stage first: the search screen is drawn over it, and the
+      // screen closes itself if the track it opened for goes away.
+      karaoke.setOpen(true);
+      karaoke.setSearchOpen(true);
+      // Tapping the magnifier only opens the form — it is the Search
+      // button *inside* it that queries, against fields seeded from the
+      // playing track. A spoken command has no second tap to give, so it
+      // runs that same search with those same seeds; the screen then
+      // opens on the results, which is where a tap would have landed too.
+      useLyricsStore.getState().search({
+        title: argument?.trim() || track.title,
+        artist: track.subtitle,
+      });
+      return;
+    }
+
+    case "lyrics_save": {
+      // `confirm` is what the green tick calls, and it is a no-op without
+      // a videoId and a lyric — so "save lyric" with nothing on screen
+      // saves nothing rather than caching an empty result for the track.
+      const lyrics = useLyricsStore.getState();
+      if (!lyrics.lyrics) {
+        console.warn("[voice] nothing to save — no lyrics on screen");
+        return;
+      }
+      lyrics.confirm();
+      return;
+    }
+
     case "karaoke": {
       const want = parseSwitch(argument);
       const karaoke = useKaraokeStore.getState();

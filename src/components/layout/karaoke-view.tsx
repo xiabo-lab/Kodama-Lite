@@ -238,8 +238,10 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
   const [sourceOpen, setSourceOpen] = useState(false);
   // The search screen is a full-screen overlay, but the stage still has to
   // treat it as "a panel is open" — otherwise the lyrics column widens
-  // back out underneath it and snaps when it closes.
-  const [searchOpen, setSearchOpen] = useState(false);
+  // back out underneath it and snaps when it closes. Read from the store
+  // rather than mirrored up from the button, so a spoken "search lyric"
+  // narrows the column exactly as a tap does.
+  const searchOpen = useKaraokeStore((s) => s.searchOpen);
   const panelOpen = queueOpen || sourceOpen || searchOpen;
 
   // Only needed for the "estimated timing" disclosure now — the stage
@@ -441,7 +443,6 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
           "right-0 flex items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-25 [&_svg]:size-5",
         )}
         boxClassName={CORNER_BOX}
-        onOpenChange={setSearchOpen}
         disabled={!hasTrack}
       />
 
