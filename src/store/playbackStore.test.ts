@@ -290,3 +290,73 @@ describe("recovering from a failed track", () => {
     expect(usePlaybackStore.getState().streamUrl).toBe("http://127.0.0.1/x/stream/a");
   });
 });
+
+describe("media:control seek", () => {
+  it("applies an absolute seek", () => {
+    usePlaybackStore.getState().playQueue([track("a", 200)], 0);
+    usePlaybackStore.setState({ position: 30, duration: 200 });
+    usePlaybackStore
+      .getState()
+      .applyEvents([{ type: "media:control", action: "seek", position: 120 }]);
+    expect(usePlaybackStore.getState().position).toBe(120);
+  });
+
+  it("applies a relative seek forward and backward", () => {
+    // MPRIS `Seek` is relative — a head unit's fast-forward sends an offset,
+    // not a destination. Both this and the Rust arm that emits it were
+    // missing, so fast-forward and rewind did nothing at all.
+    usePlaybackStore.getState().playQueue([track("a", 200)], 0);
+    usePlaybackStore.setState({ position: 30, duration: 200 });
+
+    usePlaybackStore
+      .getState()
+      .applyEvents([{ type: "media:control", action: "seek_by", position: 60 }]);
+    expect(usePlaybackStore.getState().position).toBe(90);
+
+    usePlaybackStore
+      .getState()
+      .applyEvents([{ type: "media:control", action: "seek_by", position: -20 }]);
+    expect(usePlaybackStore.getState().position).toBe(70);
+  });
+
+  it("clamps a relative seek to the ends of the track", () => {
+    usePlaybackStore.getState().playQueue([track("a", 200)], 0);
+    usePlaybackStore.setState({ position: 190, duration: 200 });
+
+    // Past the end lands at the end, not beyond it.
+    usePlaybackStore
+      .getState()
+      .applyEvents([{ type: "media:control", action: "seek_by", position: 60 }]);
+    expect(usePlaybackStore.getState().position).toBe(200);
+
+    // Before the start lands at 0 — `seek` already floors at 0.
+    usePlaybackStore.setState({ position: 5 });
+    usePlaybackStore
+      .getState()
+      .applyEvents([{ type: "media:control", action: "seek_by", position: -30 }]);
+    expect(usePlaybackStore.getState().position).toBe(0);
+  });
+});
+
+describe("media:control volume", () => {
+  it("applies an absolute volume from the head unit", () => {
+    // AVRCP absolute volume arrives as an MPRIS Volume property write.
+    // It used to be dropped, so the car's volume knob moved nothing.
+    usePlaybackStore.setState({ volume: 1, muted: true });
+    usePlaybackStore
+      .getState()
+      .applyEvents([{ type: "media:control", action: "volume", volume: 0.2 }]);
+    const s = usePlaybackStore.getState();
+    expect(s.volume).toBeCloseTo(0.2);
+    // setVolume unmutes, which is what turning a knob means.
+    expect(s.muted).toBe(false);
+  });
+
+  it("ignores a volume event with no value", () => {
+    usePlaybackStore.setState({ volume: 0.5 });
+    usePlaybackStore
+      .getState()
+      .applyEvents([{ type: "media:control", action: "volume" }]);
+    expect(usePlaybackStore.getState().volume).toBeCloseTo(0.5);
+  });
+});

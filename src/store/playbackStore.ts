@@ -435,6 +435,19 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
               case "seek":
                 if (typeof e.position === "number") get().seek(e.position);
                 break;
+              // Relative, and clamped to the track so a long press of
+              // fast-forward near the end lands at the end rather than
+              // asking the element for a position past it.
+              case "volume":
+                if (typeof e.volume === "number") get().setVolume(e.volume);
+                break;
+              case "seek_by":
+                if (typeof e.position === "number") {
+                  const { position, duration } = get();
+                  const target = position + e.position;
+                  get().seek(duration > 0 ? Math.min(target, duration) : target);
+                }
+                break;
             }
             break;
           default:

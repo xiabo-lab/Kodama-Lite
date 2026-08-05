@@ -24,11 +24,24 @@ use std::time::Duration;
 
 use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
+    SeekDirection,
 };
 use tauri::AppHandle;
 
 use crate::bus::emit;
 use crate::protocol::AppEvent;
+
+/// Step for a `Seek` that carries no amount. Matches what most head units
+/// do for a single press of fast-forward.
+const DEFAULT_SEEK_STEP_S: f64 = 10.0;
+
+/// A seek offset as a signed number of seconds.
+fn signed(direction: SeekDirection, secs: f64) -> f64 {
+    match direction {
+        SeekDirection::Forward => secs,
+        SeekDirection::Backward => -secs,
+    }
+}
 
 thread_local! {
     static CONTROLS: RefCell<Option<MediaControls>> = const { RefCell::new(None) };
@@ -77,6 +90,17 @@ pub fn init(app: &AppHandle) {
                 AppEvent::MediaControl {
                     action: action.to_string(),
                     position,
+                    volume: None,
+                },
+            );
+        };
+        let send_volume = |v: f64| {
+            emit(
+                &app_handle,
+                AppEvent::MediaControl {
+                    action: "volume".to_string(),
+                    position: None,
+                    volume: Some(v),
                 },
             );
         };
@@ -90,6 +114,30 @@ pub fn init(app: &AppHandle) {
             MediaControlEvent::SetPosition(MediaPosition(d)) => {
                 send("seek", Some(d.as_secs_f64()))
             }
+            // MPRIS `Seek` is *relative*, and souvlaki delivers it as
+            // `SeekBy`. Both used to fall into the catch-all below and be
+            // dropped without a word, so a head unit's fast-forward and
+            // rewind — which is what AVRCP maps to `Seek` — did nothing at
+            // all. Verified against the running app: `Seek` by +60 s moved
+            // playback 2.0 s, i.e. only the time the test itself took.
+            //
+            // Sent as an offset rather than resolved here, because only the
+            // view plane knows the true current position; this side sees it
+            // at whatever the 2 s metadata push last reported.
+            MediaControlEvent::SeekBy(direction, amount) => {
+                let secs = amount.as_secs_f64();
+                send("seek_by", Some(signed(direction, secs)))
+            }
+            // `Seek` with no amount: the spec leaves the step to the player.
+            MediaControlEvent::Seek(direction) => {
+                send("seek_by", Some(signed(direction, DEFAULT_SEEK_STEP_S)))
+            }
+            // A head unit setting absolute volume over AVRCP. Dropped until
+            // now, so the car's volume knob moved nothing — measured:
+            // `playerctl volume 0.20` left the property reading 1.000000,
+            // because souvlaki only updates it once the app acts on the
+            // event.
+            MediaControlEvent::SetVolume(v) => send_volume(v.clamp(0.0, 1.0)),
             _ => {}
         }
     });

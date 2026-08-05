@@ -128,6 +128,10 @@ pub enum AppEvent {
         action: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         position: Option<f64>,
+        /// 0.0-1.0, for `volume`. Its own field rather than reusing
+        /// `position`, which would make a volume look like a seek.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        volume: Option<f64>,
     },
     /// A command from the local control endpoint — the voice assistant.
     ///

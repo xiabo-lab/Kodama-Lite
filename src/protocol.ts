@@ -98,8 +98,22 @@ export type AppEvent =
    *  present for `seek`. */
   | {
       type: "media:control";
-      action: "play" | "pause" | "toggle" | "next" | "previous" | "stop" | "seek";
+      action:
+        | "play"
+        | "pause"
+        | "toggle"
+        | "next"
+        | "previous"
+        | "stop"
+        /** Absolute — `position` is where to go, in seconds. */
+        | "seek"
+        /** Relative — `position` is a signed offset in seconds. MPRIS `Seek`
+         *  is relative, which is what a head unit's fast-forward sends. */
+        | "seek_by"
+        /** Absolute volume 0..1, in `volume`. A head unit's volume knob. */
+        | "volume";
       position?: number;
+      volume?: number;
     }
   /** A command from the local control endpoint — the voice assistant.
    *
