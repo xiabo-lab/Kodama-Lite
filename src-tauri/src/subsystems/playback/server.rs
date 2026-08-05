@@ -307,6 +307,28 @@ struct ControlRequest {
     argument: Option<String>,
 }
 
+/// Actions the view plane implements.
+///
+/// Must stay in step with the `control:command` union in `src/protocol.ts`
+/// and the switch in `src/lib/voiceControl.ts`. Duplicating the names here is
+/// the price of validating before the event reaches the webview: the
+/// exhaustiveness check on the TypeScript side catches a name added to the
+/// protocol and not handled, and this catches a name sent that exists in
+/// neither.
+const CONTROL_ACTIONS: &[&str] = &[
+    "play",
+    "search",
+    "volume",
+    "shuffle",
+    "repeat",
+    "like",
+    "lyrics",
+    "lyrics_search",
+    "lyrics_save",
+    "karaoke",
+    "quit",
+];
+
 /// `POST /<token>/control` — hand a command to the view plane.
 ///
 /// Returns as soon as the event is on the bus rather than waiting for the
@@ -314,6 +336,13 @@ struct ControlRequest {
 /// moment this returns, and blocking here would put the whole round trip
 /// inside its latency budget for no benefit — nothing it could do with a
 /// failure that it cannot do with the player's state a moment later.
+///
+/// An action this build does not implement is a different matter, and gets a
+/// 400. It used to get the same 202 as a real command, so the assistant could
+/// not tell a working feature from one the installed version predates — it
+/// said "lyrics saved" out loud to a build that had no such action and saved
+/// nothing. Not waiting for the *result* is deliberate; not checking the
+/// *name* was an oversight.
 async fn control_handler(
     AxumState(server): AxumState<StreamServer>,
     Json(req): Json<ControlRequest>,
@@ -323,6 +352,14 @@ async fn control_handler(
         req.action,
         req.argument.as_deref().unwrap_or("")
     );
+    if !CONTROL_ACTIONS.contains(&req.action.as_str()) {
+        eprintln!("[control] rejected unknown action {:?}", req.action);
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("unknown action {:?}\n", req.action),
+        )
+            .into_response();
+    }
     emit(
         &server.app,
         AppEvent::ControlCommand {
