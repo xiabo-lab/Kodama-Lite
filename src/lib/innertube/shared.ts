@@ -1,4 +1,4 @@
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { fetch as tauriFetch } from "@/lib/http";
 import { sha1Hex } from "./sha1";
 import type { ShelfItem, Thumbnail } from "./types";
 

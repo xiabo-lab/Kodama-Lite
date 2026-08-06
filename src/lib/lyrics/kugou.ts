@@ -1,5 +1,5 @@
 // Ported verbatim from YTMLite (only the fetch import source changed).
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { fetch as tauriFetch } from "@/lib/http";
 import type { Lyrics } from "@/lib/lyrics/types";
 import { parseLRC } from "@/lib/lyrics/parse-lrc";
 import { hitMatches, normalizeForMatch } from "@/lib/lyrics/match";

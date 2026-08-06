@@ -1,7 +1,7 @@
 // Ported from YTMLite's src/lib/lyrics/lrclib.ts, then extended with
 // candidate search (see `searchLrclibCandidates`).
 
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { fetch as tauriFetch } from "@/lib/http";
 import type { Lyrics } from "@/lib/lyrics/types";
 import type { LyricsCandidate } from "@/lib/lyrics/score";
 import { parseLRC } from "@/lib/lyrics/parse-lrc";
