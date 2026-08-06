@@ -9,7 +9,14 @@ import type { Track } from "@/store/playbackStore";
  * Deliberately NOT cached to localStorage, unlike Home's shelves. The list
  * is only meaningful while that exact drive is plugged in: painting a
  * remembered library for a stick that isn't there would offer tracks whose
- * every tap 404s. A scan is cheap and explicit instead.
+ * every tap 404s.
+ *
+ * That is still true, and it is *not* what made rescanning expensive. The
+ * cost was always re-reading tags, and that result is now kept on the Rust
+ * side keyed by the drive's filesystem UUID
+ * (`subsystems/local_index.rs`) — so a scan still happens on every mount,
+ * proving the drive is really there, but an unchanged one spawns no
+ * ffprobe at all and returns in well under a second.
  *
  * `playMode` is persisted, though — how you want a local playlist played
  * is a preference about you, not about the drive.
@@ -58,6 +65,54 @@ function shuffled<T>(items: T[]): T[] {
   return out;
 }
 
+/**
+ * How many rows the tab puts in the DOM at once.
+ *
+ * The store holds the whole library — up to 50,000 tracks — because "Play
+ * all" and shuffle have to cover the real drive. But `LocalTab` renders
+ * with a plain `.map()` and no virtualisation, and 50,000 rows is 50,000
+ * DOM nodes in a WebKitGTK view on a Pi, which is not a list, it is a
+ * freeze. So the list is a window and the search box is how you reach past
+ * it.
+ */
+export const LOCAL_ROW_LIMIT = 500;
+
+/** One rendered row, carrying its index into the FULL track list. */
+export type LocalRow = { track: LocalTrack; index: number };
+
+/**
+ * The rows to render for a query, each remembering where it came from.
+ *
+ * The index matters more than it looks: `buildQueue` takes a position in
+ * the complete `tracks` array, so handing it the position within a
+ * *filtered* list would start playback on a different song than the one
+ * tapped — the exact bug the shuffle path already guards against.
+ *
+ * Pure, so both the filtering and that index mapping are testable without
+ * a DOM.
+ */
+export function visibleRows(
+  tracks: LocalTrack[],
+  query: string,
+  limit: number = LOCAL_ROW_LIMIT,
+): { rows: LocalRow[]; matched: number } {
+  const q = query.trim().toLowerCase();
+  const rows: LocalRow[] = [];
+  let matched = 0;
+
+  for (let i = 0; i < tracks.length; i++) {
+    const t = tracks[i];
+    if (q && !`${t.title} ${t.artist}`.toLowerCase().includes(q)) continue;
+    matched++;
+    // Counting continues past the limit so the tab can say how many more
+    // there are — "showing 500 of 12,000" is what tells someone to type
+    // rather than to scroll looking for something that was never rendered.
+    if (rows.length < limit) rows.push({ track: t, index: i });
+  }
+
+  return { rows, matched };
+}
+
 /** A scanned file as the playback queue wants it. */
 export function toTrack(t: LocalTrack): Track {
   return {
@@ -75,6 +130,9 @@ interface LocalState {
   source?: string;
   error?: string;
   progress: { done: number; total: number };
+  /** Tags are still being read for files the index didn't already know,
+   *  while `tracks` is already showing and playable. */
+  updating: boolean;
   playMode: PlayMode;
 
   /** Ask the data plane to (mount and) scan a removable drive. */
@@ -101,10 +159,16 @@ export const useLocalStore = create<LocalState>((set, get) => ({
   status: "idle",
   tracks: [],
   progress: { done: 0, total: 0 },
+  updating: false,
   playMode: loadMode(),
 
   scan: () => {
-    set({ status: "scanning", error: undefined, progress: { done: 0, total: 0 } });
+    set({
+      status: "scanning",
+      error: undefined,
+      progress: { done: 0, total: 0 },
+      updating: false,
+    });
     dispatch({ type: "local:scan" });
   },
 
@@ -160,13 +224,25 @@ export const useLocalStore = create<LocalState>((set, get) => ({
             tracks: e.tracks,
             source: e.source,
             error: undefined,
+            // A partial list is the saved index restored: usable now, with
+            // the changed files still being read behind it. Keeping the
+            // status at "ready" is the point — the tab renders the list
+            // rather than a spinner, and `updating` is what drives the
+            // small progress line above it.
+            updating: e.partial,
           });
           break;
         case "local:error":
           // A failed rescan clears the list rather than leaving the
           // previous drive's tracks on screen: those ids are no longer in
           // the data plane's index, so every one of them would 404 on tap.
-          set({ status: "error", error: e.message, tracks: [], source: undefined });
+          set({
+            status: "error",
+            error: e.message,
+            tracks: [],
+            source: undefined,
+            updating: false,
+          });
           break;
         default:
           break;

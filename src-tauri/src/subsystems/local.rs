@@ -32,6 +32,7 @@ use tauri::{AppHandle, Manager};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::Mutex;
 
+use super::local_index::{self, ScannedFile};
 use crate::bus::emit;
 use crate::protocol::AppEvent;
 
@@ -53,10 +54,19 @@ const AUDIO_EXTENSIONS: [&str; 1] = ["mp3"];
 /// worst; going deeper mostly finds backup folders.
 const MAX_DEPTH: usize = 6;
 
-/// Upper bound on tracks. A scan is a foreground action with the user
-/// waiting, and a list this long already exceeds what anyone will page
-/// through on a car screen.
-const MAX_TRACKS: usize = 2000;
+/// Upper bound on tracks.
+///
+/// Was 2,000, chosen when every scan was a foreground wait — but that cap
+/// silently *hid* the rest of a large library rather than merely delaying
+/// it: a 20,000-song stick listed 2,000 tracks and gave no hint the other
+/// 18,000 existed. Now that an unchanged drive costs no tag reads at all
+/// (`local_index`), the wait it was protecting against is paid once, so the
+/// ceiling is the real library size instead.
+///
+/// The whole list is handed to the view plane; `LocalTab` renders a window
+/// of it rather than 50,000 DOM nodes, so "Play all" and shuffle still
+/// cover the entire drive.
+const MAX_TRACKS: usize = 50_000;
 
 /// Concurrent `ffprobe` calls. Each is a process spawn reading a few KB of
 /// header; four keeps a Pi 5's cores busy without making the scan itself
@@ -117,6 +127,10 @@ pub fn looks_local(id: &str) -> bool {
 struct Candidate {
     mount: PathBuf,
     label: String,
+    /// Filesystem UUID — what the saved index is filed under. Falls back to
+    /// the label when a filesystem has none, because two *different* sticks
+    /// sharing a label is a far rarer accident than a stick having no UUID.
+    key: String,
 }
 
 /// `lsblk -J -o ...` row, flattened. Only the fields we act on.
@@ -129,6 +143,8 @@ struct BlkDev {
     fstype: Option<String>,
     #[serde(default)]
     mountpoint: Option<String>,
+    #[serde(default)]
+    uuid: Option<String>,
     #[serde(default)]
     rm: Option<bool>,
     #[serde(default)]
@@ -163,7 +179,10 @@ async fn list_removable() -> Vec<BlkDev> {
         &[
             "-J",
             "-o",
-            "NAME,LABEL,FSTYPE,MOUNTPOINT,RM,HOTPLUG",
+            // UUID is what makes an index reusable across reboots — it is
+            // the only property of a stick that survives being unplugged,
+            // moved to the other USB port and given a new device node.
+            "NAME,LABEL,FSTYPE,MOUNTPOINT,UUID,RM,HOTPLUG",
         ],
     )
     .await
@@ -330,6 +349,18 @@ async fn mount_device(dev: &str, name: &str) -> Option<PathBuf> {
     sudo_mount(dev, name).await
 }
 
+/// What to file this drive's index under. UUID where the filesystem has
+/// one, then label, then the kernel device name — which is the weakest of
+/// the three, since `sda1` is whichever stick was plugged in first.
+fn index_key(dev: &BlkDev) -> String {
+    dev.uuid
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .or(dev.label.as_deref().filter(|l| !l.is_empty()))
+        .unwrap_or(&dev.name)
+        .to_string()
+}
+
 /// Find something to scan: already-mounted removable volumes first, then
 /// anything we can mount.
 async fn find_media() -> Vec<Candidate> {
@@ -341,6 +372,7 @@ async fn find_media() -> Vec<Candidate> {
             out.push(Candidate {
                 mount: PathBuf::from(mp),
                 label: dev.label.clone().unwrap_or_else(|| dev.name.clone()),
+                key: index_key(dev),
             });
         }
     }
@@ -355,7 +387,11 @@ async fn find_media() -> Vec<Candidate> {
         let label = dev.label.clone().unwrap_or_else(|| dev.name.clone());
         if let Some(mount) = mount_device(&node, &dev.name).await {
             eprintln!("[local] mounted {node} at {}", mount.display());
-            out.push(Candidate { mount, label });
+            out.push(Candidate {
+                mount,
+                label,
+                key: index_key(dev),
+            });
         } else {
             eprintln!("[local] could not mount {node}");
         }
@@ -371,7 +407,13 @@ fn is_audio(path: &Path) -> bool {
 }
 
 /// Recursively collect audio files, breadth-limited and count-limited.
-async fn collect_files(root: &Path) -> Vec<PathBuf> {
+///
+/// Size and mtime are taken from the directory entry we already have rather
+/// than by stat'ing each path again afterwards — on a 50,000-file drive
+/// that second pass would be 50,000 extra syscalls to learn what the walk
+/// had just been told. These two numbers are the whole staleness test, so
+/// gathering them here is what lets a rescan skip ffprobe entirely.
+async fn collect_files(root: &Path, mount: &Path) -> Vec<ScannedFile> {
     let mut found = Vec::new();
     let mut queue = vec![(root.to_path_buf(), 0usize)];
     while let Some((dir, depth)) = queue.pop() {
@@ -397,15 +439,39 @@ async fn collect_files(root: &Path) -> Vec<PathBuf> {
                 Ok(t) if t.is_dir() => queue.push((path, depth + 1)),
                 Ok(t) if t.is_file() && is_audio(&path) => {
                     if found.len() < MAX_TRACKS {
-                        found.push(path);
+                        // A file we cannot stat is still listed, with zeroes
+                        // that can never match a saved entry — so it gets
+                        // probed every time rather than being dropped.
+                        let (size, mtime) = match entry.metadata().await {
+                            Ok(m) => (m.len(), mtime_secs(&m)),
+                            Err(_) => (0, 0),
+                        };
+                        let rel = local_index::relative_key(&path, mount);
+                        found.push(ScannedFile {
+                            path,
+                            rel,
+                            size,
+                            mtime,
+                        });
                     }
                 }
                 _ => {}
             }
         }
     }
-    found.sort();
+    found.sort_by(|a, b| a.path.cmp(&b.path));
     found
+}
+
+/// Modification time as whole seconds since the epoch, or 0 if the
+/// filesystem won't say. exFAT and FAT32 — which is what these sticks are —
+/// keep only 2-second granularity, which is ample for "did this change".
+fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Title/artist from the filename, for files with no usable tags.
@@ -526,7 +592,10 @@ pub fn init(app: &AppHandle) {
 }
 
 /// `local:scan` — find, mount, walk and probe. Emits `local:scanning`
-/// immediately, progress as it probes, and `local:scanned` at the end.
+/// immediately, then — when the saved index already knows some of the
+/// drive — a `local:scanned` with `partial: true` so those tracks are
+/// playable while the rest are read, progress as it probes, and a final
+/// `local:scanned` with `partial: false`.
 ///
 /// Never blocks the command call: everything below runs in a spawned task,
 /// same contract as every other subsystem.
@@ -560,12 +629,19 @@ pub fn scan(app: &AppHandle) {
         let mut labels = Vec::new();
         for c in &candidates {
             labels.push(c.label.clone());
-            files.extend(collect_files(&c.mount).await);
+            files.extend(collect_files(&c.mount, &c.mount).await);
             if files.len() >= MAX_TRACKS {
                 files.truncate(MAX_TRACKS);
                 break;
             }
         }
+        // The index is filed per drive; with two sticks in at once the
+        // first one's key names the combined index, which is consistent
+        // because the same pair produces the same key.
+        let key = candidates
+            .first()
+            .map(|c| c.key.clone())
+            .unwrap_or_default();
 
         if files.is_empty() {
             emit(
@@ -580,29 +656,66 @@ pub fn scan(app: &AppHandle) {
             return;
         }
 
-        let total = files.len();
-        eprintln!("[local] probing {total} file(s) on {}", labels.join(", "));
+        let found = files.len();
+
+        // What actually has to be read. Everything the saved index already
+        // knows about — same path, same size, same mtime — keeps its tags
+        // and costs nothing; this is the whole point of the exercise.
+        let data_dir = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let saved = local_index::load(&data_dir, &key).await;
+        let local_index::Plan {
+            reusable,
+            to_probe,
+        } = local_index::plan(&files, &saved, |p| path_id(p));
+
+        let total = to_probe.len();
+        eprintln!(
+            "[local] {found} file(s) on {} — {} reused from index, {total} to probe",
+            labels.join(", "),
+            reusable.len()
+        );
+
+        let mut tracks: Vec<(PathBuf, LocalTrack)> = reusable;
+
+        // Publish what we already know BEFORE reading a single tag, so a
+        // drive that gained a few songs is playable immediately instead of
+        // holding the whole library hostage to the new files. `partial`
+        // keeps the tab's progress line up while the rest is read.
+        if !tracks.is_empty() && total > 0 {
+            publish_index(&app, &tracks).await;
+            emit(
+                &app,
+                AppEvent::LocalScanned {
+                    source: labels.join(", "),
+                    tracks: tracks.iter().map(|(_, t)| t.clone()).collect(),
+                    partial: true,
+                },
+            );
+        }
 
         // Probe in fixed-size batches. A batch boundary is also the natural
-        // place to report progress, which a scan of a full stick needs —
-        // 2000 spawns is tens of seconds and a silent spinner reads as a
-        // hang.
+        // place to report progress, which a first scan of a full stick needs
+        // — thousands of spawns is many minutes and a silent spinner reads
+        // as a hang.
         // Kept as (path, track) pairs because the probe can now REJECT a
         // file (non-MP3 content), so the surviving tracks no longer line
         // up positionally with `files` — zipping the two afterwards would
         // map ids to the wrong paths.
-        let mut tracks: Vec<(PathBuf, LocalTrack)> = Vec::with_capacity(total);
         let mut done = 0usize;
-        for chunk in files.chunks(PROBE_CONCURRENCY) {
+        for chunk in to_probe.chunks(PROBE_CONCURRENCY) {
             let mut batch = Vec::with_capacity(chunk.len());
-            for path in chunk {
-                let path = path.clone();
+            for f in chunk {
+                let path = f.path.clone();
                 batch.push(tauri::async_runtime::spawn(
                     async move { probe(&path).await },
                 ));
             }
-            for (handle, path) in batch.into_iter().zip(chunk.iter()) {
+            for (handle, f) in batch.into_iter().zip(chunk.iter()) {
                 done += 1;
+                let path = &f.path;
                 // A panicking probe must cost one track's tags, not the
                 // scan — fall back to what the filename says.
                 let probed = handle.await.unwrap_or_else(|_| {
@@ -630,6 +743,30 @@ pub fn scan(app: &AppHandle) {
             );
         }
 
+        // Rebuilt from the files that are on the drive right now, so
+        // deletions fall out on their own. Only files that survived the
+        // probe are recorded — a rejected non-MP3 stays out of the index
+        // and is re-examined next time, which is cheap and self-correcting.
+        {
+            let by_path: HashMap<&Path, &LocalTrack> =
+                tracks.iter().map(|(p, t)| (p.as_path(), t)).collect();
+            let entries: Vec<local_index::IndexEntry> = files
+                .iter()
+                .filter_map(|f| {
+                    let t = by_path.get(f.path.as_path())?;
+                    Some(local_index::IndexEntry {
+                        path: f.rel.clone(),
+                        size: f.size,
+                        mtime: f.mtime,
+                        title: t.title.clone(),
+                        artist: t.artist.clone(),
+                        duration: t.duration,
+                    })
+                })
+                .collect();
+            local_index::save(&data_dir, &key, entries).await;
+        }
+
         if tracks.is_empty() {
             emit(
                 &app,
@@ -640,17 +777,15 @@ pub fn scan(app: &AppHandle) {
             return;
         }
 
+        // Reused and freshly-probed tracks arrive in two groups, so without
+        // this the list would show every remembered song and then every new
+        // one, rather than one library in path order.
+        tracks.sort_by(|a, b| a.0.cmp(&b.0));
+
         // Publish the index BEFORE the event: the UI can start playback the
         // instant it renders, and a route lookup that raced the list would
         // 404 on a track the user can already see.
-        {
-            let index = app.state::<LocalIndex>();
-            let mut map = index.lock().await;
-            map.clear();
-            for (file, t) in &tracks {
-                map.insert(t.id.clone(), file.clone());
-            }
-        }
+        publish_index(&app, &tracks).await;
         let tracks: Vec<LocalTrack> = tracks.into_iter().map(|(_, t)| t).collect();
 
         eprintln!("[local] scanned {} track(s)", tracks.len());
@@ -659,7 +794,110 @@ pub fn scan(app: &AppHandle) {
             AppEvent::LocalScanned {
                 source: labels.join(", "),
                 tracks,
+                partial: false,
             },
         );
     });
+}
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+
+    /// End-to-end timing of a first scan against a second one.
+    ///
+    /// Ignored by default because it needs a real directory of real MP3s
+    /// and takes as long as the scan does. Run it against a synthetic
+    /// library to check the claim this whole module rests on:
+    ///
+    /// ```text
+    /// KL_SCAN_BENCH=/tmp/synth cargo test --lib -- --ignored --nocapture
+    /// ```
+    ///
+    /// It measures what the user actually waits for — walking, planning and
+    /// tag-reading — and asserts that the second pass reads no tags at all.
+    #[tokio::test]
+    #[ignore]
+    async fn first_scan_versus_second() {
+        let Ok(root) = std::env::var("KL_SCAN_BENCH") else {
+            eprintln!("set KL_SCAN_BENCH to a directory of mp3s");
+            return;
+        };
+        let root = PathBuf::from(root);
+        let data = std::env::temp_dir().join("kl-bench-data");
+        let _ = std::fs::remove_dir_all(&data);
+
+        let t0 = std::time::Instant::now();
+        let files = collect_files(&root, &root).await;
+        let walk = t0.elapsed();
+        assert!(!files.is_empty(), "no mp3s under {}", root.display());
+
+        // Pass 1 — nothing remembered.
+        let t1 = std::time::Instant::now();
+        let p1 = local_index::plan(&files, &local_index::DriveIndex::default(), |p| path_id(p));
+        let mut tracks = Vec::new();
+        for chunk in p1.to_probe.chunks(PROBE_CONCURRENCY) {
+            let mut batch = Vec::new();
+            for f in chunk {
+                let path = f.path.clone();
+                batch.push(tauri::async_runtime::spawn(async move { probe(&path).await }));
+            }
+            for (h, f) in batch.into_iter().zip(chunk.iter()) {
+                if let Ok(Some(t)) = h.await {
+                    tracks.push((f.clone(), t));
+                }
+            }
+        }
+        let first = t1.elapsed();
+
+        let entries: Vec<local_index::IndexEntry> = tracks
+            .iter()
+            .map(|(f, t)| local_index::IndexEntry {
+                path: f.rel.clone(),
+                size: f.size,
+                mtime: f.mtime,
+                title: t.title.clone(),
+                artist: t.artist.clone(),
+                duration: t.duration,
+            })
+            .collect();
+        local_index::save(&data, "BENCH", entries).await;
+
+        // Pass 2 — the reboot.
+        let t2 = std::time::Instant::now();
+        let files2 = collect_files(&root, &root).await;
+        let saved = local_index::load(&data, "BENCH").await;
+        let p2 = local_index::plan(&files2, &saved, |p| path_id(p));
+        let second = t2.elapsed();
+
+        eprintln!(
+            "\n  files ............ {}\n  walk ............. {:?}\n  FIRST scan ....... {:?}  ({} probed)\n  SECOND scan ...... {:?}  ({} probed, {} reused)\n  speed-up ......... {:.0}x\n",
+            files.len(),
+            walk,
+            first,
+            p1.to_probe.len(),
+            second,
+            p2.to_probe.len(),
+            p2.reusable.len(),
+            first.as_secs_f64() / second.as_secs_f64().max(1e-9),
+        );
+
+        assert_eq!(p2.to_probe.len(), 0, "second scan must read no tags");
+        assert_eq!(p2.reusable.len(), tracks.len());
+        let _ = std::fs::remove_dir_all(&data);
+    }
+}
+
+/// Make these tracks resolvable by the `/local/:id` route.
+///
+/// Called once with the reused subset and again with the full list, so a
+/// track shown during a partial update is playable the moment it appears
+/// rather than 404ing until the scan finishes.
+async fn publish_index(app: &AppHandle, tracks: &[(PathBuf, LocalTrack)]) {
+    let index = app.state::<LocalIndex>();
+    let mut map = index.lock().await;
+    map.clear();
+    for (file, t) in tracks {
+        map.insert(t.id.clone(), file.clone());
+    }
 }

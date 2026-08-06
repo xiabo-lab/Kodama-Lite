@@ -49,6 +49,12 @@ not taste, explains most of the layout decisions.
 - **Library** — Playlists, Songs, Albums, Artists, and **Local**. Local scans a USB
   drive for MP3s and lists song, artist and length, with in-order / shuffle / repeat.
   It needs no account and no internet, so it keeps working when nothing else does.
+  The first scan of a drive reads every file's tags and is slow — roughly a minute
+  per thousand songs on a Pi 5 — but the result is **saved per drive**, keyed by
+  filesystem UUID, so later scans re-read only files whose size or modification time
+  changed. Measured on a 20,000-track library: first scan ~17 min, every scan after
+  that under a second. Up to 50,000 tracks are indexed; the list renders 500 rows at
+  a time with a search box, while Play all and Shuffle still cover the whole drive.
 - **The player bar** — cover and title on the left quarter, transport spread across
   the middle, then queue and volume. The bottom row is the seek bar, with the green
   lyrics-confirm button at its left end.

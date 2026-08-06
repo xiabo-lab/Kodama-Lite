@@ -117,6 +117,7 @@ export function createMockTransport(): Transport {
                   type: "local:scanned",
                   source: "USB3 (browser mock)",
                   tracks: mock,
+                  partial: false,
                 }),
               120 + mock.length * 60,
             );

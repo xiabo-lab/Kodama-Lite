@@ -157,8 +157,14 @@ export type AppEvent =
   /** Tag-reading progress — a full stick is thousands of `ffprobe` spawns
    *  and tens of seconds, which a bare spinner misrepresents as a hang. */
   | { type: "local:progress"; done: number; total: number }
-  /** The finished library. `source` names the drive it came from. */
-  | { type: "local:scanned"; source: string; tracks: LocalTrack[] }
+  /** The library. `source` names the drive it came from.
+   *
+   *  `partial` is true for the subset restored from the saved index while
+   *  new or changed files are still being read — the list is live and
+   *  playable at that point, so a drive that gained ten songs doesn't hide
+   *  the other 20,000 while those ten are probed. A final event with
+   *  `partial: false` always follows. */
+  | { type: "local:scanned"; source: string; tracks: LocalTrack[]; partial: boolean }
   /** No drive, no music on it, or it couldn't be mounted — always with a
    *  message saying which, because the three have different fixes. */
   | { type: "local:error"; message: string };

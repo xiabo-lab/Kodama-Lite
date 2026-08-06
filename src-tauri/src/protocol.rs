@@ -180,6 +180,11 @@ pub enum AppEvent {
     LocalScanned {
         source: String,
         tracks: Vec<crate::subsystems::local::LocalTrack>,
+        /// True when this is the subset already known from the saved index
+        /// and more tags are still being read. The tab keeps its progress
+        /// line up, but the list is live and playable — a drive that gained
+        /// ten songs shouldn't hide the other 20,000 while they're read.
+        partial: bool,
     },
     /// No drive, no music on it, or it couldn't be mounted — always with a
     /// message that says which, because the three have different fixes.

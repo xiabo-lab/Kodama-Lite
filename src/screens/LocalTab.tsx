@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircleIcon,
   HardDriveIcon,
@@ -8,7 +8,12 @@ import {
   RepeatIcon,
   ShuffleIcon,
 } from "lucide-react";
-import { useLocalStore, type PlayMode } from "@/store/localStore";
+import {
+  useLocalStore,
+  visibleRows,
+  LOCAL_ROW_LIMIT,
+  type PlayMode,
+} from "@/store/localStore";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { cn } from "@/lib/utils";
 
@@ -31,10 +36,12 @@ export function LocalTab() {
   const source = useLocalStore((s) => s.source);
   const error = useLocalStore((s) => s.error);
   const progress = useLocalStore((s) => s.progress);
+  const updating = useLocalStore((s) => s.updating);
   const playMode = useLocalStore((s) => s.playMode);
   const setPlayMode = useLocalStore((s) => s.setPlayMode);
   const scan = useLocalStore((s) => s.scan);
   const buildQueue = useLocalStore((s) => s.buildQueue);
+  const [query, setQuery] = useState("");
 
   const playQueue = usePlaybackStore((s) => s.playQueue);
   const setShuffle = usePlaybackStore((s) => s.setShuffle);
@@ -49,6 +56,14 @@ export function LocalTab() {
   useEffect(() => {
     if (status === "idle") scan();
   }, [status, scan]);
+
+  // Filtering 50,000 strings on every keystroke is the kind of thing that
+  // makes a Pi's on-screen keyboard drop characters, so it is memoised on
+  // the query and the list rather than run during render.
+  const { rows, matched } = useMemo(
+    () => visibleRows(tracks, query),
+    [tracks, query],
+  );
 
   const play = (index: number) => {
     const q = buildQueue(index);
@@ -100,11 +115,17 @@ export function LocalTab() {
         <button
           type="button"
           onClick={scan}
-          disabled={status === "scanning"}
+          // Also disabled mid-update: a partial list leaves the status at
+          // "ready" so the tracks stay tappable, which would otherwise let
+          // a second scan start on top of the one still reading tags.
+          disabled={status === "scanning" || updating}
           className="flex min-h-11 items-center gap-2 rounded-md border border-input px-3 text-sm font-medium transition-colors hover:bg-accent disabled:opacity-50"
         >
           <RefreshCwIcon
-            className={cn("size-4", status === "scanning" && "animate-spin")}
+            className={cn(
+              "size-4",
+              (status === "scanning" || updating) && "animate-spin",
+            )}
           />
           Rescan
         </button>
@@ -148,6 +169,31 @@ export function LocalTab() {
         <p className="text-sm text-muted-foreground">Nothing on the drive yet.</p>
       ) : (
         <div>
+          {/* Still reading tags for files the index didn't know. The list
+              below is already playable, so this is a line rather than the
+              spinner that used to replace everything. */}
+          {updating && progress.total > 0 ? (
+            <div className="mb-2 flex items-center gap-2 rounded-md bg-accent/50 px-3 py-2 text-xs text-muted-foreground">
+              <Loader2Icon className="size-3.5 animate-spin" />
+              <span>
+                Updating library… {progress.done}/{progress.total}
+              </span>
+            </div>
+          ) : null}
+
+          {/* Only worth the vertical space once the list is past what the
+              window renders — below that, scrolling finds it faster than
+              typing does on a car keyboard. */}
+          {tracks.length > LOCAL_ROW_LIMIT ? (
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={`Search ${tracks.length.toLocaleString()} tracks…`}
+              className="mb-2 h-11 w-full rounded-md border border-input bg-transparent px-3 text-sm outline-none placeholder:text-muted-foreground focus:border-brand"
+            />
+          ) : null}
+
           {/* A header row, because three unlabelled columns of text are
               ambiguous in a way a track list with artwork is not. */}
           <div className="flex items-center gap-3 border-b border-hairline px-3 pb-1 text-xs uppercase tracking-wide text-muted-foreground">
@@ -156,7 +202,14 @@ export function LocalTab() {
             <span className="min-w-0 w-1/3">Artist</span>
             <span className="w-16 shrink-0 text-right">Length</span>
           </div>
-          {tracks.map((t, i) => {
+
+          {rows.length === 0 ? (
+            <p className="px-3 py-6 text-sm text-muted-foreground">
+              No track matches “{query}”.
+            </p>
+          ) : null}
+
+          {rows.map(({ track: t, index: i }) => {
             const playing = currentId === t.id;
             return (
               <button
@@ -193,6 +246,17 @@ export function LocalTab() {
               </button>
             );
           })}
+
+          {/* Says so plainly when the window is hiding rows. The old 2,000
+              cap dropped the rest of a large library with no indication at
+              all, which is the failure this line exists to prevent. */}
+          {matched > rows.length ? (
+            <p className="px-3 pt-3 text-xs text-muted-foreground">
+              Showing {rows.length.toLocaleString()} of{" "}
+              {matched.toLocaleString()} matching tracks — search to narrow
+              it down. Play all still covers the whole drive.
+            </p>
+          ) : null}
         </div>
       )}
     </div>
