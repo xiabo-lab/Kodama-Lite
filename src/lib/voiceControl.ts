@@ -1,12 +1,15 @@
 import type { AppEvent } from "@/protocol";
 import { dispatch } from "@/bus/bus";
+import { dispatchContent } from "@/lib/network";
 import { shelfItemToTrack } from "@/lib/track";
 import type { SearchResults, ShelfItem } from "@/lib/innertube/types";
 import { useAppStore } from "@/store/appStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
 import { useLikedSongsStore } from "@/store/likedSongsStore";
+import { useLocalStore } from "@/store/localStore";
 import { useLyricsStore } from "@/store/lyricsStore";
 import { usePlaybackStore } from "@/store/playbackStore";
+import { usePlaylistStore } from "@/store/playlistStore";
 import { useSearchStore } from "@/store/searchStore";
 
 /**
@@ -133,6 +136,114 @@ function playSearchResults(query: string): void {
       .getState()
       .playQueue(queue.items.map(shelfItemToTrack), queue.start);
   });
+}
+
+/** YouTube Music's own id for Liked Music. `playlistStore` already knows it —
+ *  `LIKED_IDS` — because liking a track has to be folded into that list. */
+const LIKED_PLAYLIST_ID = "LM";
+
+/** How long to wait for a library to arrive before giving up.
+ *
+ *  Longer than a search, because both of these can be doing real work: a USB
+ *  scan proves the drive is really there on every mount, and Liked Music is
+ *  fetched a page at a time. */
+const LIBRARY_TIMEOUT_MS = 15000;
+
+/**
+ * Wait for a store to be ready, then act on it. Gives up loudly.
+ *
+ * The same shape as `playSearchResults`: subscribe, take the first state that
+ * satisfies `ready`, and make sure exactly one of the timeout and the
+ * subscription wins. Spoken commands cannot show a spinner, so the failure
+ * has to end up somewhere a person can find it later.
+ */
+function whenReady<T>(
+  store: {
+    getState: () => T;
+    subscribe: (listener: (state: T) => void) => () => void;
+  },
+  ready: (state: T) => boolean,
+  act: (state: T) => void,
+  what: string,
+): void {
+  if (ready(store.getState())) {
+    act(store.getState());
+    return;
+  }
+
+  let done = false;
+  const finish = () => {
+    if (done) return true;
+    done = true;
+    clearTimeout(timer);
+    unsubscribe();
+    return false;
+  };
+
+  const timer = setTimeout(() => {
+    if (!finish()) console.warn("[voice] %s did not arrive in time", what);
+  }, LIBRARY_TIMEOUT_MS);
+
+  const unsubscribe = store.subscribe((state) => {
+    if (!ready(state)) return;
+    finish();
+    act(state);
+  });
+}
+
+/**
+ * Play the USB stick.
+ *
+ * Deliberately does not navigate. The Library's tab strip is React state
+ * inside that screen rather than anything a store owns, so voice cannot
+ * select the Local tab without lifting it out — and showing the Library on
+ * its default Playlists tab would be a worse lie than showing nothing. The
+ * player bar names what is playing either way.
+ */
+function playLocalLibrary(): void {
+  const local = useLocalStore.getState();
+  if (local.tracks.length === 0) local.scan();
+
+  whenReady(
+    useLocalStore,
+    (state) => state.tracks.length > 0,
+    () => {
+      const queue = useLocalStore.getState().buildQueue(0);
+      if (queue.tracks.length === 0) {
+        console.warn("[voice] the USB library is empty");
+        return;
+      }
+      console.info("[voice] local -> %d track(s)", queue.tracks.length);
+      usePlaybackStore.getState().playQueue(queue.tracks, queue.index);
+      // The transport toggles follow the chosen play mode, exactly as they do
+      // when the Local tab is played by hand. See `LocalTab`.
+      usePlaybackStore.getState().setShuffle(queue.shuffle);
+      usePlaybackStore.setState({ repeat: queue.repeat });
+    },
+    "the USB library",
+  );
+}
+
+/** Open Liked Music and play it from the top. */
+function playLikedMusic(): void {
+  useAppStore.getState().navigate({ kind: "playlist", id: LIKED_PLAYLIST_ID });
+  // The screen loads it on mount, but this must work whether or not that
+  // render has happened yet, and `playlist:load` on an entry already loading
+  // is what the retry button sends too.
+  if (!usePlaylistStore.getState().byId[LIKED_PLAYLIST_ID]) {
+    dispatchContent({ type: "playlist:load", id: LIKED_PLAYLIST_ID });
+  }
+
+  whenReady(
+    usePlaylistStore,
+    (state) => (state.byId[LIKED_PLAYLIST_ID]?.tracks.length ?? 0) > 0,
+    (state) => {
+      const tracks = state.byId[LIKED_PLAYLIST_ID]!.tracks;
+      console.info("[voice] liked -> %d track(s)", tracks.length);
+      usePlaybackStore.getState().playQueue(tracks.map(shelfItemToTrack), 0);
+    },
+    "Liked Music",
+  );
 }
 
 /** Parse a spoken volume into 0..1.
@@ -286,6 +397,23 @@ export function handleControlCommand(event: ControlCommand): void {
       const want = parseSwitch(argument);
       const karaoke = useKaraokeStore.getState();
       karaoke.setOpen(want === "toggle" ? !karaoke.open : want);
+      return;
+    }
+
+    case "home": {
+      // Navigation only. "Take me home" is about the screen; silencing the
+      // music on the way would be a second, unasked-for command.
+      useAppStore.getState().navigate({ kind: "home" });
+      return;
+    }
+
+    case "play_local": {
+      playLocalLibrary();
+      return;
+    }
+
+    case "play_liked": {
+      playLikedMusic();
       return;
     }
 

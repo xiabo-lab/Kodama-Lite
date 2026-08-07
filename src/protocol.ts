@@ -144,6 +144,18 @@ export type AppEvent =
          *  tick on the karaoke stage. */
         | "lyrics_save"
         | "karaoke"
+        /** Go back to the Home screen. Navigation only — whatever is
+         *  playing keeps playing. */
+        | "home"
+        /** Play the USB stick's library, the Library's Local tab.
+         *
+         *  There is only one offline library on this device. The audio cache
+         *  is an inventory of already-played tracks, not a browsable list,
+         *  so "play local music" and "play from USB" are the same request
+         *  and both arrive here. */
+        | "play_local"
+        /** Open Liked Music and play it. */
+        | "play_liked"
         | "quit";
       argument?: string;
     }

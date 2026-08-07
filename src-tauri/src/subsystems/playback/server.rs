@@ -326,6 +326,9 @@ const CONTROL_ACTIONS: &[&str] = &[
     "lyrics_search",
     "lyrics_save",
     "karaoke",
+    "home",
+    "play_local",
+    "play_liked",
     "quit",
 ];
 
