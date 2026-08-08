@@ -303,6 +303,45 @@ Two things worth knowing if a stick isn't detected:
   would send the scanner walking the root filesystem. `journalctl` shows both
   values per device (`[local] sda rm=… hotplug=…`) if something is missing.
 
+### Let it revive a wedged USB 5G hotspot (optional)
+
+If the car's internet comes from a 5G hotspot plugged into a USB port, expect it
+to hang somewhere out on the road: the interface stays up, the default route
+stays in place, and nothing gets through. Retrying does not clear it and nobody
+can unplug it at 70mph, so the app power-cycles the port itself.
+
+It probes reachability every 20s. When the internet has been unreachable for
+45 seconds **and** the route we were using is a USB adapter, it cycles that one
+port. Nothing happens on Wi-Fi or wired Ethernet (an outage there is the ISP's
+and the hotspot is innocent), nothing happens in the first 90 seconds after
+launch (a hotspot that is still attaching is not a hotspot that has failed), and
+nothing happens twice within 3 minutes. The Pi is never rebooted — it keeps
+playing cached and USB tracks with no internet at all, and a reboot would cost
+the car's Bluetooth link too.
+
+Two host-side things make it work properly:
+
+```bash
+sudo apt-get install -y uhubctl   # a real VBUS cycle rather than a driver rebind
+```
+
+and **passwordless sudo**, because a systemd *user* service may not switch port
+power or write to `/sys/bus/usb/drivers/usb` on its own. Without `uhubctl` the app
+falls back to unbinding and rebinding the device, which re-enumerates it without
+cutting power and clears fewer hangs; without sudo it reports that it could do
+neither, and changes nothing.
+
+Watch it work in the log:
+
+```
+[net] probe: online=false in 3.001s
+[net] sustained outage on usb0 — power-cycling USB hotspot at 1-1.2
+[net] uhubctl cycled hub 1-1 port 2
+```
+
+`[net] sustained outage, but no USB network adapter to cycle` means it decided
+the hotspot was not the carrier — the expected line at home on Wi-Fi.
+
 ### Updating
 
 Repeat step 2 with the newer version number; `apt` upgrades in place and keeps your

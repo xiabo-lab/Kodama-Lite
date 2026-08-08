@@ -64,6 +64,11 @@ pub fn run() {
             // by the time either can be reached.
             subsystems::local::init(app.handle());
             subsystems::playback::start(app.handle());
+            // The view plane only re-probes connectivity while it already
+            // believes it is offline, so an outage that begins mid-drive
+            // would otherwise be noticed by nobody. This watcher is also
+            // what gets to power-cycle a wedged USB hotspot.
+            subsystems::connectivity::start(app.handle());
             // MPRIS must be created on the main thread — souvlaki's
             // MediaControls is neither Send nor Sync. `setup` is that
             // thread, so this is the only place it can be built.
