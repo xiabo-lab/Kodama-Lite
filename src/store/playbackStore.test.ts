@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { usePlaybackStore, type Track } from "@/store/playbackStore";
+import { reportedProgress, usePlaybackStore, type Track } from "@/store/playbackStore";
 
 /**
  * Pure store-logic tests for the playback slice — the part of Phase 2 that
@@ -26,6 +26,7 @@ beforeEach(() => {
     index: -1,
     playing: false,
     status: "idle",
+    started: false,
     streamUrl: undefined,
     position: 0,
     duration: 0,
@@ -288,6 +289,146 @@ describe("recovering from a failed track", () => {
     usePlaybackStore.setState({ playing: false });
     usePlaybackStore.getState().resume();
     expect(usePlaybackStore.getState().streamUrl).toBe("http://127.0.0.1/x/stream/a");
+  });
+});
+
+/**
+ * The clock the car is told to run.
+ *
+ * A stream URL resolves instantly; the bytes do not. On a 5G hotspot that
+ * gap is seconds long, and MPRIS has no "buffering" state — so a head unit
+ * told `Playing` counts up through a silent cabin. `started` is what keeps
+ * the reported position at 0:00 until sound actually starts, and these lock
+ * in when it flips. The push itself lives in `useAudioEngine`.
+ */
+describe("started — has this track produced audio yet", () => {
+  it("is false while the stream resolves and while it downloads", () => {
+    usePlaybackStore.getState().playQueue([track("a")], 0);
+    expect(usePlaybackStore.getState().started).toBe(false);
+
+    // `stream:ready` is only a URL. It says nothing about bytes, which is
+    // exactly why `status` can't stand in for this.
+    usePlaybackStore.getState().applyEvents([
+      { type: "stream:ready", videoId: "a", url: "http://127.0.0.1/x/stream/a" },
+    ]);
+    const s = usePlaybackStore.getState();
+    expect(s.status).toBe("ready");
+    expect(s.started).toBe(false);
+    expect(s.position).toBe(0);
+  });
+
+  it("flips once, when the element reports sound", () => {
+    usePlaybackStore.getState().playQueue([track("a")], 0);
+    usePlaybackStore.getState().markStarted();
+    expect(usePlaybackStore.getState().started).toBe(true);
+    usePlaybackStore.getState().markStarted();
+    expect(usePlaybackStore.getState().started).toBe(true);
+  });
+
+  it("survives a pause, so a track paused at 2:30 still reports 2:30", () => {
+    usePlaybackStore.getState().playQueue([track("a", 200)], 0);
+    usePlaybackStore.getState().markStarted();
+    usePlaybackStore.setState({ position: 150 });
+    usePlaybackStore.getState().toggle();
+    const s = usePlaybackStore.getState();
+    expect(s.playing).toBe(false);
+    expect(s.started).toBe(true);
+    expect(s.position).toBe(150);
+  });
+
+  it("resets on the next track", () => {
+    usePlaybackStore.getState().playQueue([track("a"), track("b")], 0);
+    usePlaybackStore.getState().markStarted();
+    usePlaybackStore.getState().next();
+    expect(usePlaybackStore.getState().started).toBe(false);
+  });
+
+  it("resets — with the position — when a failed track is retried", () => {
+    usePlaybackStore.getState().playQueue([track("a")], 0);
+    usePlaybackStore.getState().applyEvents([
+      { type: "stream:ready", videoId: "a", url: "http://127.0.0.1/x/stream/a" },
+    ]);
+    usePlaybackStore.getState().markStarted();
+    usePlaybackStore.setState({ position: 42 });
+    usePlaybackStore.getState().applyEvents([
+      { type: "stream:error", videoId: "a", message: "Couldn't download." },
+    ]);
+
+    // The retry re-loads the element, which restarts the track from zero.
+    usePlaybackStore.getState().resume();
+    const s = usePlaybackStore.getState();
+    expect(s.started).toBe(false);
+    expect(s.position).toBe(0);
+  });
+
+  it("is not cleared by resuming a healthy track mid-song", () => {
+    usePlaybackStore.getState().playQueue([track("a", 200)], 0);
+    usePlaybackStore.getState().applyEvents([
+      { type: "stream:ready", videoId: "a", url: "http://127.0.0.1/x/stream/a" },
+    ]);
+    usePlaybackStore.getState().markStarted();
+    usePlaybackStore.setState({ position: 90, playing: false });
+    usePlaybackStore.getState().resume();
+    const s = usePlaybackStore.getState();
+    expect(s.started).toBe(true);
+    expect(s.position).toBe(90);
+  });
+});
+
+describe("reportedProgress — the clock the car is given", () => {
+  it("freezes at 0:00 while a track is still downloading", () => {
+    // `playing` is true and the user is waiting; nothing is audible yet.
+    // Told `Playing`, a head unit extrapolates and its bar walks away from
+    // the Pi's — the whole bug.
+    expect(reportedProgress({ started: false, playing: true, position: 0 })).toEqual({
+      elapsed: 0,
+      paused: true,
+    });
+  });
+
+  it("still reports 0:00 if a position leaks in before playback starts", () => {
+    expect(reportedProgress({ started: false, playing: true, position: 37 })).toEqual({
+      elapsed: 0,
+      paused: true,
+    });
+  });
+
+  it("reports the real position once audio is out", () => {
+    expect(reportedProgress({ started: true, playing: true, position: 12.5 })).toEqual({
+      elapsed: 12.5,
+      paused: false,
+    });
+  });
+
+  it("keeps the position of a track paused mid-song", () => {
+    expect(reportedProgress({ started: true, playing: false, position: 150 })).toEqual({
+      elapsed: 150,
+      paused: true,
+    });
+  });
+
+  it("matches the store through a whole load → play cycle", () => {
+    usePlaybackStore.getState().playQueue([track("a", 200)], 0);
+    expect(reportedProgress(usePlaybackStore.getState())).toEqual({
+      elapsed: 0,
+      paused: true,
+    });
+
+    usePlaybackStore.getState().applyEvents([
+      { type: "stream:ready", videoId: "a", url: "http://127.0.0.1/x/stream/a" },
+    ]);
+    // Still only a URL — no bytes, no sound, so still a stopped clock.
+    expect(reportedProgress(usePlaybackStore.getState())).toEqual({
+      elapsed: 0,
+      paused: true,
+    });
+
+    usePlaybackStore.getState().markStarted();
+    usePlaybackStore.getState().setPosition(3);
+    expect(reportedProgress(usePlaybackStore.getState())).toEqual({
+      elapsed: 3,
+      paused: false,
+    });
   });
 });
 

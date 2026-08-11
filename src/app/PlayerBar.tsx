@@ -62,6 +62,7 @@ export function PlayerBar() {
   const index = usePlaybackStore((s) => s.index);
   const playing = usePlaybackStore((s) => s.playing);
   const status = usePlaybackStore((s) => s.status);
+  const started = usePlaybackStore((s) => s.started);
   const shuffle = usePlaybackStore((s) => s.shuffle);
   const repeat = usePlaybackStore((s) => s.repeat);
   const position = usePlaybackStore((s) => s.position);
@@ -81,7 +82,12 @@ export function PlayerBar() {
 
   const track = index >= 0 ? queue[index] : undefined;
   const hasTrack = !!track;
-  const loading = status === "loading";
+  // `status` goes "ready" the instant the URL resolves, which is before a
+  // single byte has been fetched — so on a slow link the bar showed a
+  // Pause button and the artist's name over a silent car. Waiting for
+  // `started` keeps the spinner up for the whole download, which is what
+  // the 0:00 elapsed readout beside it has always been saying.
+  const loading = status === "loading" || (playing && !started);
   const error = status === "error" ? playError : undefined;
 
   /**

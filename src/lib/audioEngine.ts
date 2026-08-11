@@ -3,7 +3,7 @@ import { dispatch } from "@/bus/bus";
 import { useAppStore } from "@/store/appStore";
 import { useLyricsStore } from "@/store/lyricsStore";
 import { useRadioStore } from "@/store/radioStore";
-import { usePlaybackStore } from "@/store/playbackStore";
+import { reportedProgress, usePlaybackStore } from "@/store/playbackStore";
 import { useSettingsStore } from "@/store/settingsStore";
 
 /**
@@ -75,9 +75,15 @@ export function useAudioEngine(): void {
   // trips a second for a scrubber the client interpolates anyway.
   // Values are read imperatively so this sync never re-triggers the
   // resolve/playback effects below.
+  //
+  // **Nothing audible is reported as paused at 0:00** — `reportedProgress`
+  // owns that rule and explains it. As soon as the element really starts,
+  // `started` flips, this effect re-runs, and the scrubber leaves 0:00
+  // together with the audio.
   const track = usePlaybackStore((s) => (s.index >= 0 ? s.queue[s.index] : undefined));
   const playingForMedia = usePlaybackStore((s) => s.playing);
   const durationForMedia = usePlaybackStore((s) => s.duration);
+  const startedForMedia = usePlaybackStore((s) => s.started);
   useEffect(() => {
     const push = () => {
       const s = usePlaybackStore.getState();
@@ -86,6 +92,7 @@ export function useAudioEngine(): void {
         dispatch({ type: "media:clear" });
         return;
       }
+      const { elapsed, paused } = reportedProgress(s);
       dispatch({
         type: "media:update",
         title: t.title,
@@ -93,15 +100,17 @@ export function useAudioEngine(): void {
         album: "",
         thumbnail: t.thumbnail ?? "",
         duration: Number.isFinite(s.duration) ? s.duration : 0,
-        elapsed: s.position,
-        paused: !s.playing,
+        elapsed,
+        paused,
       });
     };
     push();
-    if (!playingForMedia) return;
+    // A clock that is frozen at zero needs no refreshing — the one push
+    // above already said so, and the next state change re-runs this.
+    if (!playingForMedia || !startedForMedia) return;
     const id = window.setInterval(push, 2000);
     return () => window.clearInterval(id);
-  }, [track, playingForMedia, durationForMedia]);
+  }, [track, playingForMedia, durationForMedia, startedForMedia]);
 
   // ── The *other* MPRIS player ────────────────────────────────────────
   //
@@ -188,8 +197,12 @@ export function useAudioEngine(): void {
       artist: track.subtitle ?? "",
       artwork: track.thumbnail ? [{ src: track.thumbnail }] : [],
     });
-    ms.playbackState = playingForMedia ? "playing" : "paused";
-  }, [track, playingForMedia]);
+    // Same rule as the MPRIS push above, for the same reason: whichever of
+    // the two players the head unit ends up addressing must freeze at 0:00
+    // until there is sound. "playing" here is what makes a client
+    // extrapolate the position it was given.
+    ms.playbackState = playingForMedia && startedForMedia ? "playing" : "paused";
+  }, [track, playingForMedia, startedForMedia]);
 
   // Position is pushed on the same 2s cadence as the MPRIS scrubber above
   // rather than on `timeupdate`, for the same reason. `setPositionState`
@@ -200,16 +213,21 @@ export function useAudioEngine(): void {
     const ms = typeof navigator !== "undefined" ? navigator.mediaSession : undefined;
     if (!ms?.setPositionState) return;
     if (!Number.isFinite(durationForMedia) || durationForMedia <= 0) return;
+    const { elapsed } = reportedProgress({
+      started: startedForMedia,
+      playing: playingForMedia,
+      position: positionForMedia,
+    });
     try {
       ms.setPositionState({
         duration: durationForMedia,
-        position: Math.min(Math.max(positionForMedia, 0), durationForMedia),
+        position: Math.min(Math.max(elapsed, 0), durationForMedia),
         playbackRate: 1,
       });
     } catch {
       /* transient inconsistency while a track swaps — next tick fixes it */
     }
-  }, [durationForMedia, positionForMedia]);
+  }, [durationForMedia, positionForMedia, startedForMedia]);
 
   // ── Lyrics ──────────────────────────────────────────────────────────
   //
@@ -280,7 +298,15 @@ export function useAudioEngine(): void {
     if (!el) return;
     const store = usePlaybackStore.getState;
 
-    const onTimeUpdate = () => store().setPosition(el.currentTime);
+    // `timeupdate` past zero is a belt-and-braces second witness that sound
+    // is really coming out, in case an engine ever delivers the clock
+    // without the `playing` event below. Without one of the two firing,
+    // `started` never flips and the car's scrubber would stay pinned at
+    // 0:00 for the whole track — a worse failure than the one being fixed.
+    const onTimeUpdate = () => {
+      if (el.currentTime > 0) store().markStarted();
+      store().setPosition(el.currentTime);
+    };
     const onDurationChange = () => {
       if (Number.isFinite(el.duration) && el.duration > 0) {
         store().setDuration(el.duration);
@@ -292,6 +318,11 @@ export function useAudioEngine(): void {
       store().setPlayError(msg);
     };
     const onPlaying = () => {
+      // The moment audio actually starts — which is what unfreezes the
+      // car's progress bar (see the MPRIS push above). Deliberately this
+      // event and not `canplay`/`loadeddata`: those fire on a buffer being
+      // large enough, not on sound leaving the speakers.
+      store().markStarted();
       // Clear the error too, not just the status. `setPlayError` now keeps
       // the FIRST explanation rather than the last (so the data plane's
       // readable reason survives the element's MEDIA_ERR code), which

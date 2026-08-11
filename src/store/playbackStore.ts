@@ -35,6 +35,26 @@ interface PlaybackState {
   index: number;
   playing: boolean;
   status: PlaybackStatus;
+  /**
+   * Has the current track produced any actual audio yet?
+   *
+   * `status` cannot answer this. `stream:resolve` replies with a
+   * deterministic URL immediately — the download only happens when the
+   * `<audio>` element GETs it — so `status` is already `"ready"` for the
+   * whole of a slow fetch. On a 5G hotspot that is many seconds during
+   * which `playing` is true, nothing is audible, and `position` is still 0.
+   *
+   * MPRIS has no "buffering" state, so a car told `Playing` runs its own
+   * clock from whatever position it was last given: the Tesla's progress
+   * bar crept forward over a silent car while the Pi's sat at 0:00. This
+   * flag is what lets the MPRIS push say `Paused` at 0:00 until sound
+   * actually starts — see `useAudioEngine`.
+   *
+   * Set by the element's `playing` event (and a `timeupdate` past zero, in
+   * case an engine skips it); cleared whenever a track is loaded or
+   * re-resolved.
+   */
+  started: boolean;
   streamUrl?: string;
   position: number;
   duration: number;
@@ -79,6 +99,8 @@ interface PlaybackState {
    *  intent — kept separate from the action list above. */
   setPosition: (s: number) => void;
   setDuration: (s: number) => void;
+  /** The element has begun producing sound for the current track. */
+  markStarted: () => void;
   setPlayError: (message: string) => void;
 
   /** The playback slice's half of the app's single bus subscription (see
@@ -159,6 +181,31 @@ function saveVolume(volume: number, muted: boolean): void {
   }
 }
 
+/**
+ * The clock to report to the OS media controls — MPRIS, and through it the
+ * car over Bluetooth AVRCP.
+ *
+ * Not simply `{ position, !playing }`, because MPRIS has three states and
+ * none of them is "buffering". A client told `Playing` runs its own clock
+ * forward from the last position it was handed, so a track that is still
+ * downloading — `playing` true, `started` false, nothing audible — had the
+ * Tesla's progress bar climbing over a silent cabin while the Pi's own bar
+ * sat at 0:00. Reporting a paused clock at zero is the only thing in the
+ * protocol that keeps the two honest, and it is true: no sound is coming
+ * out.
+ *
+ * `started`, not `playing`, decides this. A track deliberately paused at
+ * 2:30 has produced audio and must still report 2:30.
+ */
+export function reportedProgress(s: {
+  started: boolean;
+  playing: boolean;
+  position: number;
+}): { elapsed: number; paused: boolean } {
+  if (!s.started) return { elapsed: 0, paused: true };
+  return { elapsed: s.position, paused: !s.playing };
+}
+
 /** Fire a `stream:resolve` for the now-current track. Never awaited — the
  *  URL arrives later as a `stream:ready` event. */
 function requestStream(videoId: string | undefined): void {
@@ -185,6 +232,7 @@ function loadTrackAt(
     index,
     playing: true,
     status: "loading",
+    started: false,
     position: 0,
     duration: track.duration ?? 0,
     streamUrl: undefined,
@@ -206,6 +254,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
     // stays silent; the cache only pre-fills what the player bar shows.
     playing: false,
     status: "idle",
+    started: false,
     position: 0,
     duration: cached.queue[cached.index]?.duration ?? 0,
     volume: savedVolume.volume,
@@ -290,7 +339,16 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
       // and gives the data plane a fresh run at the download (which now has
       // its own player-client retries — see `server.rs`).
       if (!streamUrl || status === "error") {
-        set({ status: "loading", error: undefined, streamUrl: undefined });
+        // `started`/`position` go back to the top with it: re-loading the
+        // element restarts the track from zero, so anything else would
+        // report a clock the audio is not keeping.
+        set({
+          status: "loading",
+          started: false,
+          position: 0,
+          error: undefined,
+          streamUrl: undefined,
+        });
         requestStream(queue[index].videoId);
         prefetchNext(queue, index);
       }
@@ -352,6 +410,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
 
     setPosition: (position) => set({ position }),
     setDuration: (duration) => set({ duration }),
+    markStarted: () => {
+      if (!get().started) set({ started: true });
+    },
     // The element's own message ("audio error (code 4)") is a last resort.
     //
     // A failed download produces BOTH events: the data plane emits

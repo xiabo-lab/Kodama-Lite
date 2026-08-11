@@ -214,6 +214,7 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
   const index = usePlaybackStore((s) => s.index);
   const playing = usePlaybackStore((s) => s.playing);
   const status = usePlaybackStore((s) => s.status);
+  const started = usePlaybackStore((s) => s.started);
   const position = usePlaybackStore((s) => s.position);
   const duration = usePlaybackStore((s) => s.duration);
   const shuffle = usePlaybackStore((s) => s.shuffle);
@@ -272,7 +273,9 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
   }, []);
 
   const hasTrack = !!track;
-  const loading = status === "loading" && playing;
+  // Same rule as the player bar: still loading until sound actually
+  // starts, not merely until the stream URL comes back.
+  const loading = playing && (status === "loading" || !started);
 
   return (
     <div

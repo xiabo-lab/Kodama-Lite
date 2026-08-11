@@ -15,14 +15,8 @@ import { cn } from "@/lib/utils";
 
 const FILTERS: SearchFilter[] = ["all", "songs", "albums", "artists", "playlists", "videos"];
 
-function useDebounced<T>(value: T, ms = 300): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const id = setTimeout(() => setDebounced(value), ms);
-    return () => clearTimeout(id);
-  }, [value, ms]);
-  return debounced;
-}
+/** How long the box waits after the last keystroke before searching. */
+const DEBOUNCE_MS = 300;
 
 /**
  * Simplified from YTMLite's search route: no "My library" scope (accounts-
@@ -42,8 +36,10 @@ export function Search() {
 
   const [value, setValue] = useState(query);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
-  const debounced = useDebounced(value, 300);
   const inputRef = useRef<HTMLInputElement>(null);
+  /** The last query this box put into the store. Anything else appearing
+   *  there came from somewhere that isn't the keyboard — see below. */
+  const sentRef = useRef(query);
 
   // Autofocus only — deliberately NOT auto-opening the keyboard. Arriving
   // at Search with the panel already covering the screen would hide the
@@ -52,12 +48,63 @@ export function Search() {
     inputRef.current?.focus({ preventScroll: true });
   }, []);
 
+  // Typed input, debounced.
+  //
+  // The timer is owned by this effect and keyed on `value`, so it is
+  // cancelled the instant the text changes — including when the effect
+  // below adopts a spoken query. That is the whole reason this isn't a
+  // `useDebounced` value any more: with the delay held in state, a flush
+  // already in flight lands *after* the spoken query reached the store,
+  // sees the two disagree, and re-dispatches the OLD text — putting the
+  // store and the results back to the previous search. Reproduced in the
+  // browser harness, where a throttled background tab widens the window
+  // enough to hit it every time. Cancelling beats detecting: there is no
+  // stale flush left to reason about.
   useEffect(() => {
-    if (debounced.trim() !== query.trim()) search(debounced, filter);
-    // Only re-run when the debounced typed value changes — `search`/`filter`
-    // changing for other reasons (tab click) must not re-trigger this.
+    if (value.trim() === query.trim()) return;
+    const id = setTimeout(() => {
+      sentRef.current = value;
+      search(value, filter);
+    }, DEBOUNCE_MS);
+    return () => clearTimeout(id);
+    // Only what's in the box re-arms this. `query`/`filter` changing for
+    // other reasons (a filter tab, a spoken search) must not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debounced]);
+  }, [value]);
+
+  // Adopt a query that arrived from outside this component — which in
+  // practice means the voice assistant ("search song B").
+  //
+  // This box seeds itself from the store once, at mount, and is the only
+  // writer afterwards. That was fine while typing was the only way to
+  // search: the first spoken search navigated here, so the screen mounted
+  // with the spoken text already in it and looked right. But the SECOND
+  // one arrives with the screen already mounted — the store's query and
+  // the results both changed to song B while the box went on showing song
+  // A, and the two disagreed until the screen was unmounted. Worse, the
+  // stale text was live: touching the keyboard resumed editing a query
+  // nobody was looking at any more.
+  //
+  // Comparing against what this box last *sent* is what distinguishes the
+  // two cases — echoes of our own typing are ignored, so this can never
+  // interrupt someone mid-word, while a query from anywhere else replaces
+  // the text. Adopting also re-runs the debounce effect above, which finds
+  // the box and the store already in agreement and issues nothing: the
+  // spoken search is not repeated, and any keystroke still waiting to be
+  // sent is cancelled by that effect's cleanup.
+  useEffect(() => {
+    if (query === sentRef.current) return;
+    sentRef.current = query;
+    setValue(query);
+  }, [query]);
+
+  /** Search what's in the box right now (Enter, or the keyboard's Search
+   *  key), skipping the debounce. Records what it sent so the adopt effect
+   *  above doesn't mistake the result for an outside query. */
+  const submit = () => {
+    sentRef.current = value;
+    search(value, filter);
+  };
 
   const isLoading = status === "loading" && !query;
   const trimmed = value.trim();
@@ -78,7 +125,7 @@ export function Search() {
             // someone on a physical keyboard wants.
             onPointerDown={() => setKeyboardOpen(true)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") search(value, filter);
+              if (e.key === "Enter") submit();
               if (e.key === "Escape" && value) setValue("");
             }}
             placeholder="Search songs, albums, artists…"
@@ -141,7 +188,7 @@ export function Search() {
           value={value}
           onChange={setValue}
           onSubmit={() => {
-            search(value, filter);
+            submit();
             setKeyboardOpen(false);
           }}
           onClose={() => setKeyboardOpen(false)}

@@ -1,6 +1,6 @@
 [package]
 name = "kodama-lite"
-version = "0.1.43"
+version = "0.1.44"
 description = "Kodama-Lite — a fluid, decoupled YouTube Music client for the Raspberry Pi 5"
 authors = ["xiabo-lab"]
 license = "GPL-3.0-only"
