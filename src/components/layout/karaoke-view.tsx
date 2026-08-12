@@ -15,6 +15,7 @@ import { usePlaybackStore } from "@/store/playbackStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
 import { LikeButton } from "@/components/shared/like-button";
 import { ConfirmLyricsButton } from "@/components/shared/confirm-lyrics-button";
+import { VolumeControl } from "@/components/shared/volume-control";
 import { LyricsBody, useDisplayLyrics } from "@/components/layout/lyrics-view";
 import {
   LyricsSearchButton,
@@ -132,33 +133,6 @@ const CLOSE_BTN =
  */
 const CORNER_BTN = "absolute bottom-0 z-20 size-[88px]";
 const CORNER_BOX = "size-11";
-
-/**
- * Volume slider. Its own component so the volume subscription re-renders
- * this alone rather than the whole stage (the same reason `AudioEngine` is
- * split out of `AppShell`).
- *
- * No mute button, and the same 368px length as the player bar's: at this
- * width dragging to zero is quicker than finding a toggle, and `setVolume`
- * clears `muted`, so dragging back up always restores sound.
- */
-function KaraokeVolume() {
-  const volume = usePlaybackStore((s) => s.volume);
-  const muted = usePlaybackStore((s) => s.muted);
-  const setVolume = usePlaybackStore((s) => s.setVolume);
-
-  return (
-    <input
-      type="range"
-      min={0}
-      max={100}
-      value={muted ? 0 : Math.round(volume * 100)}
-      onChange={(e) => setVolume(Number(e.target.value) / 100)}
-      aria-label="Volume"
-      className="h-3 w-[368px] accent-brand"
-    />
-  );
-}
 
 function repeatLabel(repeat: "off" | "all" | "one"): string {
   return repeat === "one" ? "Repeat one" : repeat === "all" ? "Repeat all" : "Repeat off";
@@ -282,7 +256,9 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
       className="fixed inset-0 z-50 flex flex-col bg-[#0a0a0a] text-foreground"
       onPointerDown={(e) => {
         const el = e.target as HTMLElement | null;
-        if (el?.closest("button,input[type=range]")) return;
+        // `[role=slider]` is the volume popup: a drag there is a control
+        // being used, not the "what's playing?" tap this band answers.
+        if (el?.closest("button,input[type=range],[role=slider]")) return;
         revealChrome();
       }}
     >
@@ -411,8 +387,11 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Pulled in from `right-6` to leave the bottom-right corner free
-            for the search button below — otherwise the volume slider runs
-            straight through it. */}
+            for the search button below. That was the volume slider's
+            doing — 368px of bar ran straight through the corner — and the
+            inset stays now that the slider is a glyph: the cluster is
+            right-anchored, so it simply keeps the same clearance with
+            less furniture in it. */}
         <div className="absolute inset-y-0 right-[7rem] flex items-center gap-[clamp(0.25rem,1vw,0.75rem)]">
           <LyricsSourceButton
             className={SECONDARY_BTN}
@@ -422,7 +401,14 @@ function KaraokeStage({ onClose }: { onClose: () => void }) {
           />
           <QueuePanel placement="screen-right" />
           <QueueButton className={SECONDARY_BTN} />
-          <KaraokeVolume />
+          {/* `SECONDARY_BTN` like every other button in this cluster, so
+              the stage's volume control is the same target as the player
+              bar's in behaviour and the same size as its neighbours here.
+              The popped slider is sized in `vh` to match. */}
+          <VolumeControl
+            className={SECONDARY_BTN}
+            trackClassName="h-[clamp(9.1rem,39vh,14.3rem)] w-14"
+          />
         </div>
       </div>
 

@@ -14,6 +14,7 @@ import { useKaraokeStore } from "@/store/karaokeStore";
 import { QueueButton, QueuePanel } from "@/components/layout/queue-panel";
 import { LikeButton } from "@/components/shared/like-button";
 import { ConfirmLyricsButton } from "@/components/shared/confirm-lyrics-button";
+import { VolumeControl } from "@/components/shared/volume-control";
 import { cn } from "@/lib/utils";
 
 /**
@@ -67,15 +68,12 @@ export function PlayerBar() {
   const repeat = usePlaybackStore((s) => s.repeat);
   const position = usePlaybackStore((s) => s.position);
   const duration = usePlaybackStore((s) => s.duration);
-  const volume = usePlaybackStore((s) => s.volume);
-  const muted = usePlaybackStore((s) => s.muted);
   const playError = usePlaybackStore((s) => s.error);
 
   const toggle = usePlaybackStore((s) => s.toggle);
   const next = usePlaybackStore((s) => s.next);
   const prev = usePlaybackStore((s) => s.prev);
   const seek = usePlaybackStore((s) => s.seek);
-  const setVolume = usePlaybackStore((s) => s.setVolume);
   const setShuffle = usePlaybackStore((s) => s.setShuffle);
   const cycleRepeat = usePlaybackStore((s) => s.cycleRepeat);
   const karaokeOpen = useKaraokeStore((s) => s.open);
@@ -174,7 +172,7 @@ export function PlayerBar() {
         </div>
 
         {/* One flex group for every control from Shuffle through the volume
-            slider, spread edge to edge across whatever width is left
+            button, spread edge to edge across whatever width is left
             (`justify-between`) instead of packed against the right margin.
             `gap-4` is the floor, not the spacing: it only takes effect once
             the window is narrow enough that there's no slack left to
@@ -245,18 +243,20 @@ export function PlayerBar() {
           <QueueButton
             className={cn(ICON_BTN, "flex items-center justify-center [&_svg]:size-10")}
           />
-          {/* No mute button: at this length the slider is a faster way to
-              silence it than a toggle, and `setVolume` clears `muted`, so
-              dragging back up always restores sound even if something else
-              (the karaoke bar's own mute) set it. */}
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={muted ? 0 : Math.round(volume * 100)}
-            onChange={(e) => setVolume(Number(e.target.value) / 100)}
-            aria-label="Volume"
-            className="h-3 w-[368px] accent-brand"
+          {/* Was a 368px horizontal slider parked here permanently. It is
+              a speaker glyph now, popping a vertical slider on tap — see
+              `VolumeControl`. The row gained that width back, which
+              `justify-between` has already redistributed as gap; nothing
+              else needed re-tuning, and `TAP_EXPAND`'s figure only grows
+              further from meeting its neighbour as the gaps widen. */}
+          <VolumeControl
+            className={cn(ICON_BTN, "flex items-center justify-center [&_svg]:size-10")}
+            // `justify-between` puts the last child hard against the bar's
+            // 16px padding, which left the glyph 25px from the screen edge
+            // and the popup above it nearly overhanging — too tight to hit
+            // confidently from the driver's seat. 2rem of margin buys the
+            // gap back out of slack the row has to spare.
+            wrapperClassName="mr-8"
           />
         </div>
       </div>
