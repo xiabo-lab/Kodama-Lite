@@ -334,8 +334,9 @@ run, a release build and an install — on an appliance bolted into a car. The
 ladder can now be overridden from disk instead:
 
 ```bash
-# <cache-dir> is ~/.cache/com.xiabolab.kodamalite on the Pi.
-cat > ~/.cache/com.xiabolab.kodamalite/player-clients.txt <<'EOF'
+# <cache-dir> is the stream cache — note the `/stream`, which is where the
+# app's own cache_dir points; the parent directory is the wrong place.
+cat > ~/.cache/com.xiabolab.kodamalite/stream/player-clients.txt <<'EOF'
 # One --extractor-args value per line, tried in order.
 # "-" or "default" means: pin nothing, use yt-dlp's own client list.
 -
@@ -352,9 +353,11 @@ case, and a file that parses to nothing is ignored rather than obeyed, because a
 empty ladder plays nothing at all.
 
 The app also remembers which client last worked
-(`<cache-dir>/last-good-client.txt`) and tries it first, so when a tier does
-break, the wasted attempts cost one track rather than every track. Delete the
-file to forget.
+(`~/.cache/com.xiabolab.kodamalite/stream/last-good-client.txt`) and tries it
+first, so when a tier does break, the wasted attempts cost one track rather than
+every track. Delete the file to forget. **An empty file is the normal, healthy
+case** — the unpinned lead tier has no `--extractor-args` to record, so winning
+with it writes nothing.
 
 ### Let it read a USB drive (for Library → Local)
 
