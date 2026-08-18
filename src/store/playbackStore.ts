@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { dispatch } from "@/bus/bus";
-import type { AppEvent, YtdlpPhase } from "@/protocol";
+import type { AppEvent, StreamErrorCause, YtdlpPhase } from "@/protocol";
 
 /**
  * Playback — queue, transport, and the current stream URL.
@@ -63,6 +63,11 @@ interface PlaybackState {
   shuffle: boolean;
   repeat: RepeatMode;
   error?: string;
+  /** What to blame for `error`. Paired with it — set and cleared
+   *  together — so a stale cause can never outlive its message. Absent
+   *  when the `<audio>` element reported the failure and the data plane
+   *  never got a word in; that path knows nothing about causes. */
+  errorCause?: StreamErrorCause;
   /** Managed yt-dlp binary lifecycle — surfaced so the player bar can show
    *  a "preparing audio engine" hint instead of a confusing play failure
    *  on a very first launch. */
@@ -237,6 +242,7 @@ function loadTrackAt(
     duration: track.duration ?? 0,
     streamUrl: undefined,
     error: undefined,
+    errorCause: undefined,
   });
   saveQueueCache(queue, index);
   requestStream(track.videoId);
@@ -347,6 +353,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
           started: false,
           position: 0,
           error: undefined,
+          errorCause: undefined,
           streamUrl: undefined,
         });
         requestStream(queue[index].videoId);
@@ -427,6 +434,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
         status: "error",
         playing: false,
         error: s.error ?? message,
+        // No cause: this is the element's generic MEDIA_ERR, which knows
+        // only that decoding failed. Leaving it undefined rather than
+        // guessing "track" keeps the UI honest about not knowing — and
+        // when `stream:error` won the race, `s.error` is already set and
+        // its cause is already here to be preserved.
+        errorCause: s.error ? s.errorCause : undefined,
       })),
 
     applyEvents: (events) => {
@@ -454,7 +467,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
             // ever reads `streamUrl` for the CURRENT track, so an event
             // for anything else is simply dropped here.
             if (current?.videoId === e.videoId) {
-              set({ streamUrl: e.url, status: "ready", error: undefined });
+              set({
+                streamUrl: e.url,
+                status: "ready",
+                error: undefined,
+                errorCause: undefined,
+              });
             }
             break;
           }
@@ -462,7 +480,12 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
             const { queue, index } = get();
             const current = index >= 0 ? queue[index] : undefined;
             if (current?.videoId === e.videoId) {
-              set({ status: "error", playing: false, error: e.message });
+              set({
+                status: "error",
+                playing: false,
+                error: e.message,
+                errorCause: e.cause,
+              });
             }
             break;
           }

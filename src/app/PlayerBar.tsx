@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  AlertTriangleIcon,
   Loader2Icon,
   PauseIcon,
   PlayIcon,
@@ -8,7 +9,9 @@ import {
   ShuffleIcon,
   SkipBackIcon,
   SkipForwardIcon,
+  WifiOffIcon,
 } from "lucide-react";
+import type { StreamErrorCause } from "@/protocol";
 import { usePlaybackStore } from "@/store/playbackStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
 import { QueueButton, QueuePanel } from "@/components/layout/queue-panel";
@@ -58,6 +61,32 @@ const ICON_BTN = "text-muted-foreground transition-colors hover:text-foreground"
 const TAP_EXPAND =
   "relative before:absolute before:inset-x-[calc(clamp(0.375rem,calc((100vw-62rem)/28),2rem)*-1)] before:inset-y-[-1rem] before:content-['']";
 
+/**
+ * The one line the bar has room for.
+ *
+ * `offline` and `systemic` get fixed, deliberately short headlines: their
+ * full sentences explain what to do about it, which is worth reading but
+ * far too long for a truncating single line, and both are states of the
+ * whole app rather than facts about the song — so a generic phrasing loses
+ * nothing. A `track` cause is the opposite: the message is already
+ * specific and short ("This track is DRM protected."), and replacing it
+ * with a generic headline would throw away the only useful thing said.
+ * The full text is on the tooltip in every case.
+ */
+function errorHeadline(
+  cause: StreamErrorCause | undefined,
+  message: string,
+): string {
+  switch (cause) {
+    case "offline":
+      return "No internet connection";
+    case "systemic":
+      return "Playback is down — not just this track";
+    default:
+      return message;
+  }
+}
+
 export function PlayerBar() {
   const queue = usePlaybackStore((s) => s.queue);
   const index = usePlaybackStore((s) => s.index);
@@ -69,6 +98,7 @@ export function PlayerBar() {
   const position = usePlaybackStore((s) => s.position);
   const duration = usePlaybackStore((s) => s.duration);
   const playError = usePlaybackStore((s) => s.error);
+  const playErrorCause = usePlaybackStore((s) => s.errorCause);
 
   const toggle = usePlaybackStore((s) => s.toggle);
   const next = usePlaybackStore((s) => s.next);
@@ -87,6 +117,7 @@ export function PlayerBar() {
   // the 0:00 elapsed readout beside it has always been saying.
   const loading = status === "loading" || (playing && !started);
   const error = status === "error" ? playError : undefined;
+  const errorCause = status === "error" ? playErrorCause : undefined;
 
   /**
    * Where the thumb is being dragged to, or `null` when it isn't.
@@ -153,15 +184,30 @@ export function PlayerBar() {
             ) : error ? (
               // The real reason, not "Couldn't play this track".
               //
-              // The data plane now classifies yt-dlp's failure and sends a
+              // The data plane classifies yt-dlp's failure and sends a
               // sentence worth reading — "needs a Premium subscription",
               // "is DRM protected", "tap play to try again". Those are
               // three completely different situations that this row used
               // to render identically, leaving the only actionable
-              // difference (is it worth trying again?) invisible. The raw
-              // detail is still on the tooltip.
-              <span className="truncate text-sm text-brand" title={error}>
-                {error}
+              // difference (is it worth trying again?) invisible.
+              //
+              // `cause` goes one level further, and the headline is short
+              // on purpose: this row is a single truncated line, so the
+              // full sentence for an outage would be cut off mid-word
+              // exactly when it matters most. The headline says which of
+              // the three worlds you are in; the tooltip still carries
+              // the whole thing.
+              <span
+                className="flex items-center gap-1.5 truncate text-sm text-brand"
+                title={error}
+              >
+                {errorCause === "offline" && (
+                  <WifiOffIcon className="size-4 shrink-0" />
+                )}
+                {errorCause === "systemic" && (
+                  <AlertTriangleIcon className="size-4 shrink-0" />
+                )}
+                <span className="truncate">{errorHeadline(errorCause, error)}</span>
               </span>
             ) : (
               <span className="truncate text-sm text-muted-foreground">

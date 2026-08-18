@@ -77,6 +77,7 @@ pub fn resolve(app: &AppHandle, video_id: String) {
             AppEvent::StreamError {
                 video_id,
                 message: "invalid id".into(),
+                cause: "track".into(),
             },
         );
         return;
@@ -89,6 +90,7 @@ pub fn resolve(app: &AppHandle, video_id: String) {
                 AppEvent::StreamError {
                     video_id,
                     message: "stream server unavailable".into(),
+                    cause: "track".into(),
                 },
             );
             return;
@@ -118,6 +120,7 @@ pub fn resolve(app: &AppHandle, video_id: String) {
                 AppEvent::StreamError {
                     video_id,
                     message: "Open Library → Local to scan the USB drive first.".into(),
+                    cause: "track".into(),
                 },
             );
             return;

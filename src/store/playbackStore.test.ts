@@ -129,12 +129,12 @@ describe("applyEvents staleness guard", () => {
   it("ignores stream:error for a stale track and applies it for the current one", () => {
     usePlaybackStore.getState().playQueue([track("a")], 0);
     usePlaybackStore.getState().applyEvents([
-      { type: "stream:error", videoId: "not-a", message: "boom" },
+      { type: "stream:error", videoId: "not-a", message: "boom", cause: "track" },
     ]);
     expect(usePlaybackStore.getState().status).toBe("loading"); // untouched
 
     usePlaybackStore.getState().applyEvents([
-      { type: "stream:error", videoId: "a", message: "boom" },
+      { type: "stream:error", videoId: "a", message: "boom", cause: "track" },
     ]);
     const s = usePlaybackStore.getState();
     expect(s.status).toBe("error");
@@ -239,8 +239,7 @@ describe("recovering from a failed track", () => {
       {
         type: "stream:error",
         videoId: "a",
-        message: "This track is DRM protected.",
-      },
+        message: "This track is DRM protected.", cause: "track" },
     ]);
     usePlaybackStore.getState().setPlayError("audio error (code 4)");
     expect(usePlaybackStore.getState().error).toBe("This track is DRM protected.");
@@ -269,7 +268,7 @@ describe("recovering from a failed track", () => {
       { type: "stream:ready", videoId: "a", url: "http://127.0.0.1/x/stream/a" },
     ]);
     usePlaybackStore.getState().applyEvents([
-      { type: "stream:error", videoId: "a", message: "Couldn't download." },
+      { type: "stream:error", videoId: "a", message: "Couldn't download.", cause: "track" },
     ]);
     expect(usePlaybackStore.getState().streamUrl).toBe("http://127.0.0.1/x/stream/a");
 
@@ -351,7 +350,7 @@ describe("started — has this track produced audio yet", () => {
     usePlaybackStore.getState().markStarted();
     usePlaybackStore.setState({ position: 42 });
     usePlaybackStore.getState().applyEvents([
-      { type: "stream:error", videoId: "a", message: "Couldn't download." },
+      { type: "stream:error", videoId: "a", message: "Couldn't download.", cause: "track" },
     ]);
 
     // The retry re-loads the element, which restarts the track from zero.

@@ -3,7 +3,8 @@
 //! yt-dlp on PATH, so the app owns its copy: the official single-file
 //! release for the host OS + architecture is downloaded into
 //! `<app-data>/bin/yt-dlp[.exe]` on first run and self-updated via
-//! `yt-dlp -U` on a 72-hour cadence.
+//! `yt-dlp --update-to nightly` on a 72-hour cadence. The choice of the
+//! nightly channel is load-bearing and is argued at `DOWNLOAD_URL`.
 //!
 //! One deliberate change from YTMLite: state is reported through the
 //! typed bus (`AppEvent::YtdlpState`) instead of a bespoke `ytdlp-state`
@@ -24,30 +25,53 @@ const BINARY_NAME: &str = "yt-dlp.exe";
 #[cfg(not(windows))]
 const BINARY_NAME: &str = "yt-dlp";
 
-/// Official single-file builds. The `latest/download/` URL redirects to
-/// the newest release asset, so no GitHub API call (and no rate limit) is
-/// involved. The per-arch Linux assets are self-contained PyInstaller
-/// bundles — no system Python needed, which matters on Raspberry Pi OS
-/// Lite.
+/// Official single-file builds, from the **nightly** channel. The
+/// `latest/download/` URL redirects to the newest release asset, so no
+/// GitHub API call (and no rate limit) is involved. The per-arch Linux
+/// assets are self-contained PyInstaller bundles — no system Python
+/// needed, which matters on Raspberry Pi OS Lite.
+///
+/// ## Why nightly and not stable
+///
+/// Measured 2026-08-18, during an outage where nothing would play at all.
+/// Four videos, both channels, with and without our pinned player clients:
+///
+/// | | pinned `tv,android_vr` | yt-dlp's own defaults |
+/// |---|---|---|
+/// | stable 2026.07.04 (45 days old) | fail | fail |
+/// | nightly 2026.08.18 (hours old)  | fail | **all four downloaded** |
+///
+/// YouTube breaks extraction every few months and upstream fixes it within
+/// hours — but only nightly carries the fix; stable had been 45 days
+/// behind. Nightly is less baked, so the risk runs the other way: a bad
+/// build could break playback that was working. Two things bound that.
+/// The player-client walk in `playback::server` still has pinned fallback
+/// tiers underneath the unpinned lead, and `UPDATE_INTERVAL` means we take
+/// at most one new build every 72 hours rather than every launch.
+///
+/// See also the `--update-to nightly` in `maybe_self_update`: an install
+/// that already has a *stable* binary has to be switched onto this
+/// channel, not merely updated within it.
 #[cfg(windows)]
 const DOWNLOAD_URL: &str =
-    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
+    "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp.exe";
 #[cfg(target_os = "macos")]
 const DOWNLOAD_URL: &str =
-    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos";
+    "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_macos";
 /// Raspberry Pi 4/5 on 64-bit Raspberry Pi OS — the primary target.
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const DOWNLOAD_URL: &str =
-    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64";
+    "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux_aarch64";
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const DOWNLOAD_URL: &str =
-    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
+    "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux";
 #[cfg(all(
     unix,
     not(target_os = "macos"),
     not(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "x86_64")))
 ))]
-const DOWNLOAD_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
+const DOWNLOAD_URL: &str =
+    "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp";
 
 const UPDATE_INTERVAL: Duration = Duration::from_secs(72 * 60 * 60);
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(180);
@@ -233,9 +257,17 @@ fn update_stamp_age(managed: &Path) -> Option<Duration> {
     Some(Duration::from_secs(now.saturating_sub(then)))
 }
 
-/// Run `yt-dlp -U` on the managed copy when the last check is older than
+/// Update the managed copy when the last check is older than
 /// `UPDATE_INTERVAL`. The stamp is refreshed even on failure so a broken
 /// update path can't turn into a retry storm on every launch.
+///
+/// `--update-to nightly` rather than the plain `-U` this used to run:
+/// `-U` updates *within* whatever channel the binary came from, so every
+/// install that already had a stable binary — which is all of them before
+/// the constant above changed — would have gone on tracking stable
+/// forever, and the channel switch would only ever have reached brand new
+/// installs. Naming the channel explicitly is idempotent: on a binary
+/// already tracking nightly it is an ordinary update.
 async fn maybe_self_update(managed: &Path) {
     match update_stamp_age(managed) {
         Some(age) if age < UPDATE_INTERVAL => return,
@@ -244,7 +276,7 @@ async fn maybe_self_update(managed: &Path) {
     touch_update_stamp(managed);
 
     let mut cmd = tokio::process::Command::new(managed);
-    cmd.arg("-U");
+    cmd.args(["--update-to", "nightly"]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

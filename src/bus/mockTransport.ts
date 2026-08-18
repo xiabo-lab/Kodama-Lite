@@ -68,8 +68,7 @@ export function createMockTransport(): Transport {
               emit({
                 type: "stream:error",
                 videoId: command.videoId,
-                message: "offline",
-              });
+                message: "offline", cause: "track" });
             }
           }, 80);
           break;

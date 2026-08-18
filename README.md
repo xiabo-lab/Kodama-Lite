@@ -256,6 +256,106 @@ Check it worked in the journal:
 [info] <id>: Downloading 1 format(s): 774        ← the Premium-only format
 ```
 
+### Know when playback breaks, before you're in the car
+
+YouTube changes how extraction works every few months, and when it does,
+*nothing plays*. On 2026-08-18 every player client the app tried started
+returning 403 within the same hour; the journal explained it all day, and the
+only thing that noticed was someone tapping play on a drive.
+
+Three things guard that now. Two are in the app and need no setup:
+
+- **yt-dlp tracks the nightly channel.** Upstream usually fixes YouTube-side
+  breakage within hours, but only in nightly — stable was 45 days behind during
+  that outage. See `DOWNLOAD_URL` in `src-tauri/src/ytdlp.rs` for the measured
+  before/after.
+- **The first extraction attempt pins no player client**, so it inherits
+  yt-dlp's own maintained default list. Pinning is what opted the app out of the
+  fix last time. The pinned tiers still run underneath as fallbacks.
+
+The third is this canary, which answers "does extraction still work at all?"
+somewhere you can see it:
+
+```bash
+bash scripts/playback-canary.sh          # exit 0 healthy, 1 broken
+YTDLP=/tmp/yt-dlp-nightly bash scripts/playback-canary.sh   # try another build
+```
+
+It fetches a whole known-good track with the app's own yt-dlp binary and format
+selector — deliberately not through the app, whose cache would report health
+long after extraction died, and deliberately not a partial fetch, because during
+that outage the *first* chunk downloaded fine and the second 403'd. It says
+`SKIP` rather than `BROKEN` when the network is down, so it can't cry wolf in a
+tunnel.
+
+Run it daily from a timer:
+
+```bash
+cat > ~/.config/systemd/user/kodama-canary.service <<'EOF'
+[Unit]
+Description=Kodama-Lite playback canary
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/Kodama-Lite/scripts/playback-canary.sh --quiet
+EOF
+
+cat > ~/.config/systemd/user/kodama-canary.timer <<'EOF'
+[Unit]
+Description=Check Kodama-Lite playback daily
+
+[Timer]
+# Not on the hour: a metered 5G link doesn't need a thundering herd, and
+# nothing here is time-critical.
+OnCalendar=*-*-* 07:23:00
+# The Pi is only powered while the car is on, so a fixed time is missed far
+# more often than it is hit. Persistent runs it on the next boot instead.
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl --user daemon-reload && systemctl --user enable --now kodama-canary.timer
+systemctl --user start kodama-canary.service   # run it once now
+journalctl -t kodama-canary -n 5 --no-pager
+```
+
+A healthy run logs `OK: playback healthy — fetched 3433755 bytes`; a broken one
+logs `BROKEN:` plus yt-dlp's own error line.
+
+### Change player clients without cutting a release
+
+Fixing that outage meant editing four strings, which cost a version bump, a CI
+run, a release build and an install — on an appliance bolted into a car. The
+ladder can now be overridden from disk instead:
+
+```bash
+# <cache-dir> is ~/.cache/com.xiabolab.kodamalite on the Pi.
+cat > ~/.cache/com.xiabolab.kodamalite/player-clients.txt <<'EOF'
+# One --extractor-args value per line, tried in order.
+# "-" or "default" means: pin nothing, use yt-dlp's own client list.
+-
+youtube:player_client=web_music
+youtube:player_client=web_embedded
+EOF
+systemctl --user restart kodama-lite
+journalctl _SYSTEMD_USER_UNIT=kodama-lite.service -n 20 | grep ladder
+```
+
+The Premium tier is always appended and is not configurable — a file that
+omitted it would silently disable Premium playback. A missing file is the normal
+case, and a file that parses to nothing is ignored rather than obeyed, because an
+empty ladder plays nothing at all.
+
+The app also remembers which client last worked
+(`<cache-dir>/last-good-client.txt`) and tries it first, so when a tier does
+break, the wasted attempts cost one track rather than every track. Delete the
+file to forget.
+
 ### Let it read a USB drive (for Library → Local)
 
 The Local tab plays music off a USB stick. On a desktop the file manager's

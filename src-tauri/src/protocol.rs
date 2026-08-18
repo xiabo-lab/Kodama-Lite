@@ -101,6 +101,15 @@ pub enum AppEvent {
         #[serde(rename = "videoId")]
         video_id: String,
         message: String,
+        /// What to blame: `"offline"` | `"systemic"` | `"track"`.
+        ///
+        /// `message` is already written for a human, so this is not for
+        /// choosing words — it is so the UI can treat "the internet is
+        /// gone" and "extraction is broken for everything" as states of
+        /// the app rather than as properties of one song. Before this,
+        /// all three rendered identically and the user had no way to tell
+        /// a DRM'd track from a dead extractor.
+        cause: String,
     },
     /// Managed yt-dlp binary lifecycle: "downloading" | "ready" | "error".
     #[serde(rename = "ytdlp:state")]

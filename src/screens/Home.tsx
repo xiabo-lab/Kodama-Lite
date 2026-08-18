@@ -1,4 +1,5 @@
-import { WifiOffIcon } from "lucide-react";
+import { RefreshCwIcon, WifiOffIcon } from "lucide-react";
+import { dispatchContent } from "@/lib/network";
 import { useAppStore } from "@/store/appStore";
 import { useHomeStore } from "@/store/homeStore";
 import { ShelfSection } from "@/components/shared/shelf-section";
@@ -20,6 +21,7 @@ export function Home() {
   const status = useHomeStore((s) => s.status);
   const shelves = useHomeStore((s) => s.shelves);
   const stale = useHomeStore((s) => s.stale);
+  const refreshing = useHomeStore((s) => s.refreshing);
   const online = useAppStore((s) => s.online);
 
   const showSkeleton = status === "loading" && shelves.length === 0;
@@ -34,13 +36,29 @@ export function Home() {
       {/* Overlaid, not stacked. As a row it cost ~44px — a fifth of the
           content area — and pushed the first album row's artwork below the
           fold whenever the feed was stale, which is exactly when you most
-          want to see it. */}
-      {(!online || stale) && (
-        <span className="pointer-events-none absolute right-6 top-2 z-10 flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-xs text-muted-foreground backdrop-blur">
-          <WifiOffIcon className="size-3.5" />
-          {online ? "showing saved" : "offline — showing saved"}
-        </span>
-      )}
+          want to see it. The refresh button joins the same overlay rather
+          than claiming a row of its own, for exactly that reason. */}
+      <div className="absolute right-6 top-2 z-10 flex items-center gap-2">
+        {(!online || stale) && (
+          <span className="pointer-events-none flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-xs text-muted-foreground backdrop-blur">
+            <WifiOffIcon className="size-3.5" />
+            {online ? "showing saved" : "offline — showing saved"}
+          </span>
+        )}
+        {/* Sized for a fingertip in a moving car, not for a mouse: the
+            44px box is the whole target, while the icon inside stays
+            small enough not to shout on a 440px-tall panel. */}
+        <button
+          type="button"
+          aria-label="Refresh home feed"
+          title="Refresh"
+          onClick={() => dispatchContent({ type: "home:load" })}
+          disabled={refreshing}
+          className="flex size-11 items-center justify-center rounded-full bg-white/10 text-muted-foreground backdrop-blur transition-colors hover:bg-white/20 hover:text-foreground active:bg-white/25 disabled:opacity-60"
+        >
+          <RefreshCwIcon className={`size-4 ${refreshing ? "animate-spin" : ""}`} />
+        </button>
+      </div>
 
       {showSkeleton && <HomeSkeleton />}
 

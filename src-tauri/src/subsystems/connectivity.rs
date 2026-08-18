@@ -119,7 +119,12 @@ async fn probe(app: &AppHandle) {
 /// anycast resolver on 443. This deliberately does NOT go through the app's
 /// HTTP resolver (which on the Pi bypasses /etc/hosts) — it's a raw socket,
 /// so it reflects actual internet reachability.
-async fn reachable() -> bool {
+/// One-shot reachability, exposed so a failed download can tell "the
+/// internet is gone" from "extraction is broken" before it blames the
+/// wrong one. Does not emit `net:status` — this is a question, not the
+/// watcher, and a caller asking mid-failure must not race the UI's own
+/// online state.
+pub(crate) async fn reachable() -> bool {
     matches!(
         timeout(PROBE_TIMEOUT, TcpStream::connect("1.1.1.1:443")).await,
         Ok(Ok(_))

@@ -73,12 +73,35 @@ export type Command =
 
 export type YtdlpPhase = "downloading" | "ready" | "error";
 
+/**
+ * Why a track wouldn't play.
+ *
+ * - `offline`  — the network is gone. Outranks everything: during an
+ *   outage every track fails, and blaming YouTube's API while the user is
+ *   in a tunnel is worse than saying nothing.
+ * - `systemic` — several *different* tracks failed in a row with the
+ *   network up, so extraction itself is broken, not this song.
+ * - `track`    — this one video: DRM, region, age gate, or a transient
+ *   miss worth another tap.
+ */
+export type StreamErrorCause = "offline" | "systemic" | "track";
+
 export type AppEvent =
   | { type: "pong"; ts: number }
   | { type: "net:status"; online: boolean }
   /** A videoId is now playable at `url` (the local stream server). */
   | { type: "stream:ready"; videoId: string; url: string }
-  | { type: "stream:error"; videoId: string; message: string }
+  | {
+      type: "stream:error";
+      videoId: string;
+      message: string;
+      /** What to blame. `message` is already human-readable, so this is
+       *  not for wording — it lets the UI treat "no internet" and
+       *  "extraction is broken for everything" as states of the app
+       *  rather than as properties of one song. Mirrors
+       *  `AppEvent::StreamError::cause` in `protocol.rs`. */
+      cause: StreamErrorCause;
+    }
   | { type: "ytdlp:state"; phase: YtdlpPhase; message?: string }
   /** The current account session. `cookie` is the `Cookie:` header value
    *  for music.youtube.com and `sapisid` the SAPISID value the

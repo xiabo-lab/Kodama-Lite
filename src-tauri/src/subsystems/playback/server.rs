@@ -15,6 +15,8 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+// NOT `std::path::Path`: axum's `Path` extractor is imported below and
+// owns that name in this file.
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -80,9 +82,12 @@ struct DownloadFailure {
 }
 
 /// One download attempt's configuration.
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Attempt {
-    /// `--extractor-args` value.
-    args: &'static str,
+    /// `--extractor-args` value — or **empty**, meaning pass no
+    /// `--extractor-args` at all and let yt-dlp pick its own player
+    /// clients. The empty lead tier is the point; see `default_ladder`.
+    args: String,
     /// Whether to attach the signed-in session.
     ///
     /// This is the field that has to stay honest. Attaching cookies is NOT
@@ -97,51 +102,178 @@ struct Attempt {
     cookies: bool,
 }
 
-/// What to try, in order.
+/// What to try, in order. Every tier but the last is anonymous: a 403 on
+/// the media URL usually means the client that did the extraction and the
+/// one fetching the bytes disagree about the token, so the useful retry is
+/// "extract it a different way". These fail independently in practice.
 ///
-/// Tiers 1-3 are anonymous: a 403 on the media URL usually means the client
-/// that did the extraction and the one fetching the bytes disagree about the
-/// token, so the useful retry is "extract it a different way". These fail
-/// independently in practice.
+/// The last tier is the Premium tier and is only ever reached for a track
+/// that has been refused as Premium-only. It pairs the signed-in session
+/// with `web_music` and relies on a PO Token provider being reachable —
+/// see `premium_tier` and the README.
 ///
-/// Tier 4 is the Premium tier and is only ever reached for a track that has
-/// been refused as Premium-only. It pairs the signed-in session with
-/// `web_music` and relies on a PO Token provider being reachable — see
-/// `PREMIUM_TIER` below and the README.
+/// ## Why tier 1 pins nothing
 ///
-/// **Reordered 2026-08-18, and the reason matters.** The ladder used to lead
-/// with `tv,android_vr` → `web_safari,mweb` → `ios,tv_embedded`. Measured on
-/// the device, *all three* now fail and nothing plays at all: the media URL
-/// those clients hand back carries no `pot=` parameter, and googlevideo has
-/// started rejecting it — no `Range` header at all is a 403, `Range: 0-…` is
-/// served, and any range not starting at zero is a 403 even as the first
-/// request on a freshly signed URL. So a download dies after roughly one
-/// chunk. `web_safari` cannot cover for it either: its formats now arrive
-/// with no URL whatsoever (YouTube forcing SABR, yt-dlp#12482), which is
-/// exactly how the walk used to fall through onto the token-less
-/// `android_vr` URL. Of eight clients tried against four different videos,
-/// only `web_music` and `web_embedded` downloaded to completion.
+/// Rewritten 2026-08-18, after an outage where no track would play at all.
+/// The ladder had pinned `tv,android_vr` → `web_safari,mweb` →
+/// `ios,tv_embedded`, and all three died at once: the media URL those
+/// clients hand back carries no `pot=` parameter, and googlevideo now
+/// rejects it — no `Range` header at all is a 403, `Range: 0-…` is served,
+/// and any range not starting at zero is a 403 even as the first request
+/// on a freshly signed URL, so a download dies after roughly one chunk.
+/// `web_safari` could not cover for it either: its formats now arrive with
+/// no URL whatsoever (YouTube forcing SABR, yt-dlp#12482), which is exactly
+/// how the walk fell through onto the token-less `android_vr` URL.
 ///
-/// Note the cost of this order: the *normal* path now depends on a JS
-/// runtime and a reachable PO Token provider, which the old `android_vr`
-/// lead deliberately did not. A `kodama-pot` outage degrades all playback,
-/// not just Premium. `tv,android_vr` is kept as tier 3 to hedge that, and
-/// because a client YouTube has broken has historically come back.
-const ATTEMPTS: [Attempt; 4] = [
-    // `web_music` is also the client whose GVS PO Token unlocks Music
-    // Premium formats (yt-dlp#13835 demonstrates premium-only format 774
-    // arriving with exactly this pairing and being skipped without it) —
-    // hence the same client on tier 1 anonymously and tier 4 signed in.
-    Attempt { args: "youtube:player_client=web_music", cookies: false },
-    Attempt { args: "youtube:player_client=web_embedded", cookies: false },
-    // Kept as a hedge, not because it currently works. See above.
-    Attempt { args: "youtube:player_client=tv,android_vr", cookies: false },
-    Attempt { args: "youtube:player_client=web_music", cookies: true },
-];
+/// Measured across four videos and both yt-dlp channels:
+///
+/// | | pinned `tv,android_vr` | no `--extractor-args` |
+/// |---|---|---|
+/// | stable 2026.07.04 | fail | fail |
+/// | nightly 2026.08.18 | fail | **all four downloaded** |
+///
+/// The lesson is not "pin different clients" — it is that **pinning at all
+/// opts us out of the maintenance that fixes this**. yt-dlp's default
+/// client list is the most actively maintained part of the extractor;
+/// upstream had already fixed this by changing which clients it picks, and
+/// our pin overrode the fix. So tier 1 now pins nothing and inherits that
+/// work, and the pinned tiers below it are fallbacks for the case where a
+/// specific client outlives the default — which is what they were always
+/// really for.
+///
+/// Note what tiers 2-3 cost: they depend on a JS runtime and a reachable
+/// PO Token provider, which `android_vr` did not, so a `kodama-pot` outage
+/// degrades them. `tv,android_vr` is kept below them as the no-dependency
+/// hedge, and because a client YouTube has broken has historically come
+/// back.
+fn default_ladder() -> Vec<Attempt> {
+    let anon = |args: &str| Attempt { args: args.to_string(), cookies: false };
+    vec![
+        // Nothing pinned: yt-dlp's own current default clients.
+        anon(""),
+        anon("youtube:player_client=web_music"),
+        anon("youtube:player_client=web_embedded"),
+        // The hedge: needs neither Deno nor a PO token.
+        anon("youtube:player_client=tv,android_vr"),
+        // `web_music` is also the client whose GVS PO Token unlocks Music
+        // Premium formats (yt-dlp#13835 demonstrates premium-only format
+        // 774 arriving with exactly this pairing and being skipped without
+        // it) — hence the same client anonymously above and signed in here.
+        Attempt { args: "youtube:player_client=web_music".to_string(), cookies: true },
+    ]
+}
 
-/// Index of the Premium tier in `ATTEMPTS`. Skipped entirely unless the
+/// Ladder override, read from `<cache-dir>/player-clients.txt`.
+///
+/// This exists because the outage above cost a full bump → CI → release →
+/// install cycle to change four strings, on an appliance bolted into a car.
+/// With this, the same fix is one line and a restart. One
+/// `--extractor-args` value per line; `-` or `default` means the unpinned
+/// tier; `#` starts a comment. The Premium tier is always appended and is
+/// not configurable — it is not a client choice but a distinct mode, and a
+/// ladder file that omitted it would silently disable Premium playback.
+///
+/// A missing file is the normal case, not an error. A file that parses to
+/// nothing is ignored rather than obeyed: an empty ladder can play nothing
+/// at all, which is a worse failure than the one this is here to fix.
+const LADDER_FILE: &str = "player-clients.txt";
+
+fn parse_ladder(text: &str) -> Vec<Attempt> {
+    text.lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .filter(|l| !l.is_empty())
+        .map(|l| Attempt {
+            args: if l == "-" || l.eq_ignore_ascii_case("default") {
+                String::new()
+            } else {
+                l.to_string()
+            },
+            cookies: false,
+        })
+        .collect()
+}
+
+fn load_ladder(cache_dir: &std::path::Path) -> Vec<Attempt> {
+    let path = cache_dir.join(LADDER_FILE);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return default_ladder();
+    };
+    let mut anon = parse_ladder(&text);
+    if anon.is_empty() {
+        eprintln!("[stream] {LADDER_FILE} has no usable entries — using the built-in ladder");
+        return default_ladder();
+    }
+    eprintln!("[stream] player-client ladder from {}: {} tier(s)", path.display(), anon.len());
+    let premium = default_ladder().pop().expect("ladder is never empty");
+    anon.push(premium);
+    anon
+}
+
+/// Index of the Premium tier: always last. Skipped entirely unless the
 /// failure so far was specifically a Premium refusal.
-const PREMIUM_TIER: usize = 3;
+fn premium_tier(ladder: &[Attempt]) -> usize {
+    ladder.len().saturating_sub(1)
+}
+
+/// Remembered winner, in `<cache-dir>/last-good-client.txt`.
+///
+/// When YouTube breaks the lead tier, every track pays for the whole walk
+/// again — three failed extractions, each with yt-dlp's own retries inside
+/// it, before the one that works. That was tens of seconds per track for
+/// the entire drive. Recording the client that last worked and trying it
+/// first makes that cost land once rather than on every song.
+///
+/// Deliberately only a *reordering*: nothing is removed, so a remembered
+/// client that later breaks costs one wasted attempt and then the ordinary
+/// ladder runs. And it is only ever an anonymous tier — the Premium tier
+/// stays pinned last, where the walk can reach it only on a Premium
+/// refusal.
+const LAST_GOOD_FILE: &str = "last-good-client.txt";
+
+fn read_last_good(cache_dir: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(cache_dir.join(LAST_GOOD_FILE))
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+fn write_last_good(cache_dir: &std::path::Path, args: &str) {
+    let path = cache_dir.join(LAST_GOOD_FILE);
+    if read_last_good(cache_dir).as_deref() == Some(args) {
+        return; // steady state: don't rewrite the file on every track
+    }
+    let _ = std::fs::write(path, args);
+}
+
+/// A tier's name for the log. The unpinned tier has no `--extractor-args`
+/// to print, and an empty string in the journal reads like a bug.
+fn describe(args: &str) -> &str {
+    if args.is_empty() {
+        "yt-dlp default clients"
+    } else {
+        args
+    }
+}
+
+/// The order to walk `ladder`, with `remembered` promoted to the front.
+///
+/// Returns indices so the caller keeps using the real tier numbers — the
+/// Premium check is `index == premium_tier`, and promoting by index rather
+/// than by cloning keeps that comparison meaningful.
+fn walk_order(ladder: &[Attempt], remembered: Option<&str>) -> Vec<usize> {
+    let premium = premium_tier(ladder);
+    let mut order: Vec<usize> = (0..ladder.len()).collect();
+    let Some(want) = remembered else { return order };
+    // Only anonymous tiers are promotable, and only to the front of the
+    // anonymous run — never past the Premium tier at the end.
+    if let Some(pos) = order
+        .iter()
+        .position(|&i| i != premium && ladder[i].args == want)
+    {
+        let idx = order.remove(pos);
+        order.insert(0, idx);
+    }
+    order
+}
 
 /// Gap between attempts. Short — this is a user waiting on a track, not a
 /// background job — but non-zero, because an immediate retry against a
@@ -202,6 +334,82 @@ fn classify(stderr: &str) -> FailureKind {
     FailureKind::Transient
 }
 
+// ── Is it this track, the internet, or extraction itself? ─────────────
+
+/// How many *different* tracks must fail in a row before we stop blaming
+/// the track and start blaming extraction.
+///
+/// Distinct video IDs, not attempts: the same track failing repeatedly is
+/// one broken track and the user tapping play again. Three different ones
+/// in a row is not a coincidence — during the 2026-08-18 outage it was
+/// every track, forever, and the app said "Couldn't play this track" each
+/// time, which is precisely the sentence that sent the user looking for a
+/// bad song instead of a broken extractor.
+const SYSTEMIC_THRESHOLD: usize = 3;
+
+/// Distinct recently-failed video IDs, most recent last. Cleared by any
+/// success, because one track playing proves extraction works.
+static RECENT_FAILURES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn note_success() {
+    if let Ok(mut f) = RECENT_FAILURES.lock() {
+        f.clear();
+    }
+}
+
+/// Record a failed track and answer whether the failures now look systemic.
+fn note_failure(video_id: &str) -> bool {
+    let Ok(mut f) = RECENT_FAILURES.lock() else {
+        return false;
+    };
+    if f.last().map(String::as_str) != Some(video_id) && !f.iter().any(|v| v == video_id) {
+        f.push(video_id.to_string());
+    }
+    if f.len() > SYSTEMIC_THRESHOLD {
+        let excess = f.len() - SYSTEMIC_THRESHOLD;
+        f.drain(..excess);
+    }
+    f.len() >= SYSTEMIC_THRESHOLD
+}
+
+/// What to blame, in the words the user gets and a tag the UI can style.
+///
+/// The order is the whole point. "No internet" outranks everything —
+/// during an outage every track fails and the systemic counter fills up,
+/// but telling someone in a tunnel that YouTube changed its API is worse
+/// than useless. Only once the network answers is a total failure
+/// attributable to extraction.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Cause {
+    Offline,
+    Systemic,
+    Track,
+}
+
+impl Cause {
+    fn tag(self) -> &'static str {
+        match self {
+            Cause::Offline => "offline",
+            Cause::Systemic => "systemic",
+            Cause::Track => "track",
+        }
+    }
+}
+
+fn cause_of(online: bool, systemic: bool, permanent: bool) -> Cause {
+    if !online {
+        Cause::Offline
+    } else if systemic && !permanent {
+        // A permanent verdict — DRM, region, age gate — is a fact about
+        // this one video and stays that way even in the middle of an
+        // outage. Overwriting it with "everything is broken" would throw
+        // away the most specific answer we have.
+        Cause::Systemic
+    } else {
+        Cause::Track
+    }
+}
+
 /// The last `ERROR:` line yt-dlp printed, which is the one that says what
 /// actually went wrong. Falls back to the whole tail when it printed
 /// something unusual.
@@ -225,15 +433,21 @@ pub struct StreamServer {
     /// track" came from — the reason existed, in the journal, and simply
     /// had no route to the screen.
     app: tauri::AppHandle,
+    /// The player-client walk, resolved once at startup so an override
+    /// file is read from disk on launch rather than on every track.
+    /// `Arc` because `StreamServer` is cloned into every download task.
+    ladder: Arc<Vec<Attempt>>,
 }
 
 impl StreamServer {
     pub fn new(cache_dir: PathBuf, ytdlp_bin: PathBuf, app: tauri::AppHandle) -> Self {
+        let ladder = Arc::new(load_ladder(&cache_dir));
         Self {
             cache_dir,
             downloads: Arc::new(Mutex::new(HashMap::new())),
             ytdlp_bin,
             app,
+            ladder,
         }
     }
 
@@ -460,9 +674,13 @@ fn spawn_downloader(
         // nothing serves partial data (the HTTP handler waits for
         // `complete` before touching the file), so truncating is safe.
         let cookies_path = srv.cache_dir.join("yt-dlp-cookies.txt");
+        let ladder = srv.ladder.clone();
+        let premium_idx = premium_tier(&ladder);
+        let order = walk_order(&ladder, read_last_good(&srv.cache_dir).as_deref());
         let mut success = false;
         let mut last: Option<DownloadFailure> = None;
-        for (attempt, cfg) in ATTEMPTS.iter().enumerate() {
+        for (step, &attempt) in order.iter().enumerate() {
+            let cfg = &ladder[attempt];
             // The Premium tier is opt-in per track, not part of the walk.
             // Reaching it on an ordinary failure would attach cookies to a
             // track that never needed them — and an authenticated request
@@ -470,7 +688,7 @@ fn spawn_downloader(
             // would turn a retryable failure into a guaranteed one. Only a
             // track YouTube has explicitly refused as Premium-only is
             // worth spending it on.
-            if attempt == PREMIUM_TIER && !last.as_ref().is_some_and(|f| f.premium_gated) {
+            if attempt == premium_idx && !last.as_ref().is_some_and(|f| f.premium_gated) {
                 break;
             }
 
@@ -485,16 +703,16 @@ fn spawn_downloader(
                 None
             };
 
-            if attempt > 0 {
+            if step > 0 {
                 eprintln!(
                     "[stream] {video_id}: attempt {}/{} with {}",
-                    attempt + 1,
-                    ATTEMPTS.len(),
-                    cfg.args
+                    step + 1,
+                    order.len(),
+                    describe(&cfg.args),
                 );
                 tokio::time::sleep(RETRY_BACKOFF).await;
             }
-            match try_download(&video_id, &part_path, &ytdlp_bin, cfg.args, cookies, &state).await {
+            match try_download(&video_id, &part_path, &ytdlp_bin, &cfg.args, cookies, &state).await {
                 Ok(bytes) => {
                     if let Err(e) = tokio::fs::rename(&part_path, &final_path).await {
                         eprintln!("[stream] rename: {e}");
@@ -502,6 +720,17 @@ fn spawn_downloader(
                     } else {
                         eprintln!("[stream] cached {video_id} ({bytes} bytes)");
                         success = true;
+                        // One track playing is proof extraction works, so
+                        // it clears the systemic streak outright.
+                        note_success();
+                        // Only anonymous winners are worth remembering:
+                        // the Premium tier is reached by a track-specific
+                        // refusal, not because it is a good general
+                        // choice, and promoting it would attach cookies to
+                        // every ordinary track.
+                        if !cfg.cookies {
+                            write_last_good(&srv.cache_dir, &cfg.args);
+                        }
                     }
                     break;
                 }
@@ -512,7 +741,7 @@ fn spawn_downloader(
                     // clients but is exactly what the Premium tier exists
                     // for, so it must not end the walk before reaching it.
                     let stop = matches!(f.kind, FailureKind::Permanent(_))
-                        && !(f.premium_gated && attempt < PREMIUM_TIER);
+                        && !(f.premium_gated && attempt != premium_idx);
                     last = Some(f);
                     if stop {
                         eprintln!("[stream] {video_id}: permanent — not retrying");
@@ -526,24 +755,48 @@ fn spawn_downloader(
         // between plays.
         let _ = tokio::fs::remove_file(&cookies_path).await;
 
-        // Tell the UI what happened, in words it can show. A permanent
-        // failure gets its own sentence; a transient one that survived
-        // every client is reported as worth trying again, because it is.
+        // Tell the UI what happened, in words it can show — and, since
+        // 2026-08-18, *what to blame*. A permanent failure gets its own
+        // sentence; a transient one that survived every client is reported
+        // as worth trying again, because it is.
         if !success {
-            let message = match last.as_ref().map(|f| &f.kind) {
-                Some(FailureKind::Permanent(m)) => (*m).to_string(),
+            let permanent = matches!(last.as_ref().map(|f| &f.kind), Some(FailureKind::Permanent(_)));
+            let systemic = note_failure(&video_id);
+            // Ask the network only when we are about to blame something
+            // big. A per-track failure needs no probe, and this runs on
+            // every failed song.
+            let online = if systemic || !permanent {
+                crate::subsystems::connectivity::reachable().await
+            } else {
+                true
+            };
+            let cause = cause_of(online, systemic, permanent);
+            let message = match (cause, last.as_ref().map(|f| &f.kind)) {
+                (Cause::Offline, _) => {
+                    "No internet connection. Saved and USB tracks still play; this one will \
+                     work once you're back online."
+                        .to_string()
+                }
+                (Cause::Systemic, _) => {
+                    "Nothing is playing right now — this isn't just this track. YouTube changed \
+                     something and yt-dlp needs to catch up. It updates itself; try again later."
+                        .to_string()
+                }
+                (Cause::Track, Some(FailureKind::Permanent(m))) => (*m).to_string(),
                 // Counts the anonymous tiers only: the Premium tier is not
                 // part of every track's journey, so including it would
                 // overstate what was tried for an ordinary failure.
-                _ => format!(
-                    "Couldn't download this track after {PREMIUM_TIER} attempts. Tap play to try again."
+                (Cause::Track, _) => format!(
+                    "Couldn't download this track after {premium_idx} attempts. Tap play to try again."
                 ),
             };
+            eprintln!("[stream] {video_id}: giving up — cause={}", cause.tag());
             emit(
                 &app,
                 AppEvent::StreamError {
                     video_id: video_id.clone(),
                     message,
+                    cause: cause.tag().to_string(),
                 },
             );
         }
@@ -647,11 +900,16 @@ async fn try_download(
         "3",
         "--socket-timeout",
         "15",
-        "--extractor-args",
-        extractor_args,
-        "-o",
-        "-",
     ]);
+    // Empty means "pass the flag at all" — the unpinned lead tier, which
+    // lets yt-dlp choose its own player clients. Passing
+    // `--extractor-args ""` is NOT the same thing: yt-dlp parses it as an
+    // empty spec rather than an absent one, and the whole point of that
+    // tier is to add nothing.
+    if !extractor_args.is_empty() {
+        cmd.args(["--extractor-args", extractor_args]);
+    }
+    cmd.args(["-o", "-"]);
     cmd.arg(&url);
     #[cfg(windows)]
     {
@@ -947,4 +1205,185 @@ fn generate_stream_token() -> String {
         out.push_str(&format!("{:016x}", h.finish()));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn anon(args: &str) -> Attempt {
+        Attempt { args: args.to_string(), cookies: false }
+    }
+
+    // ── The ladder override file ──────────────────────────────────────
+
+    #[test]
+    fn parses_one_client_per_line_ignoring_comments_and_blanks() {
+        let got = parse_ladder(
+            "\n# the lead tier\nyoutube:player_client=web_music\n\n  youtube:player_client=ios  # trailing\n",
+        );
+        assert_eq!(
+            got,
+            vec![anon("youtube:player_client=web_music"), anon("youtube:player_client=ios")]
+        );
+    }
+
+    /// `-` and `default` are how the file spells the unpinned tier, which
+    /// otherwise could only be written as a blank line — and blank lines
+    /// are skipped.
+    #[test]
+    fn dash_and_default_mean_no_extractor_args() {
+        assert_eq!(parse_ladder("-\ndefault\nDEFAULT"), vec![anon(""), anon(""), anon("")]);
+    }
+
+    /// A file that parses to nothing must not be obeyed: an empty ladder
+    /// plays nothing at all, which is worse than the breakage the
+    /// override exists to fix.
+    #[test]
+    fn a_file_of_only_comments_falls_back_to_the_builtin_ladder() {
+        let dir = std::env::temp_dir().join(format!("kl-ladder-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(LADDER_FILE), "# nothing here\n\n").unwrap();
+        assert_eq!(load_ladder(&dir), default_ladder());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_file_is_the_normal_case_not_an_error() {
+        let dir = std::env::temp_dir().join(format!("kl-ladder-absent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(load_ladder(&dir), default_ladder());
+    }
+
+    /// The Premium tier is appended to an override, never configurable —
+    /// a ladder file that dropped it would silently disable Premium
+    /// playback, and nothing in the UI would say so.
+    #[test]
+    fn an_override_still_ends_with_the_premium_tier() {
+        let dir = std::env::temp_dir().join(format!("kl-ladder-premium-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(LADDER_FILE), "youtube:player_client=ios\n").unwrap();
+        let ladder = load_ladder(&dir);
+        assert_eq!(ladder.len(), 2);
+        assert_eq!(ladder[0], anon("youtube:player_client=ios"));
+        assert!(ladder[premium_tier(&ladder)].cookies);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Remembering the client that worked ────────────────────────────
+
+    #[test]
+    fn the_builtin_ladder_leads_with_nothing_pinned() {
+        assert_eq!(default_ladder()[0].args, "");
+    }
+
+    #[test]
+    fn a_remembered_client_is_promoted_to_the_front() {
+        let ladder = default_ladder();
+        let order = walk_order(&ladder, Some("youtube:player_client=web_embedded"));
+        assert_eq!(ladder[order[0]].args, "youtube:player_client=web_embedded");
+        // A promotion, not a removal: everything still gets its turn, so a
+        // remembered client that later breaks costs one attempt and then
+        // the ordinary ladder runs.
+        assert_eq!(order.len(), ladder.len());
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..ladder.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn remembering_nothing_walks_the_ladder_in_order() {
+        let ladder = default_ladder();
+        assert_eq!(walk_order(&ladder, None), (0..ladder.len()).collect::<Vec<_>>());
+    }
+
+    /// The Premium tier is gated on a Premium refusal, and the gate is
+    /// `index == premium_tier`. Promoting it would attach cookies to
+    /// every ordinary track — which returns no audio at all.
+    #[test]
+    fn the_premium_tier_is_never_promoted() {
+        let ladder = default_ladder();
+        let premium = premium_tier(&ladder);
+        // Ask for exactly the Premium tier's args; the anonymous copy of
+        // the same client must win instead.
+        let order = walk_order(&ladder, Some(&ladder[premium].args));
+        assert_ne!(order[0], premium);
+        assert!(!ladder[order[0]].cookies);
+        assert_eq!(*order.last().unwrap(), premium);
+    }
+
+    #[test]
+    fn an_unknown_remembered_client_changes_nothing() {
+        let ladder = default_ladder();
+        assert_eq!(
+            walk_order(&ladder, Some("youtube:player_client=nonesuch")),
+            (0..ladder.len()).collect::<Vec<_>>()
+        );
+    }
+
+    /// The unpinned lead tier is `""`, which is also what a corrupt or
+    /// truncated last-good file reads as. Promoting it is a no-op rather
+    /// than a reorder, so this must not panic or shuffle anything.
+    #[test]
+    fn remembering_the_unpinned_tier_is_a_no_op() {
+        let ladder = default_ladder();
+        assert_eq!(walk_order(&ladder, Some("")), (0..ladder.len()).collect::<Vec<_>>());
+    }
+
+    // ── Blaming the right thing ───────────────────────────────────────
+
+    /// The ordering rule that matters: during an outage every track fails
+    /// and the systemic counter fills up, but telling someone in a tunnel
+    /// that YouTube changed its API is worse than useless.
+    #[test]
+    fn offline_outranks_a_systemic_streak() {
+        assert_eq!(cause_of(false, true, false), Cause::Offline);
+        assert_eq!(cause_of(false, false, true), Cause::Offline);
+    }
+
+    /// A permanent verdict is a fact about one video and survives even a
+    /// systemic streak — it is the most specific answer available.
+    #[test]
+    fn a_permanent_verdict_stays_about_the_track() {
+        assert_eq!(cause_of(true, true, true), Cause::Track);
+        assert_eq!(cause_of(true, false, true), Cause::Track);
+    }
+
+    #[test]
+    fn several_different_tracks_failing_online_is_systemic() {
+        assert_eq!(cause_of(true, true, false), Cause::Systemic);
+        assert_eq!(cause_of(true, false, false), Cause::Track);
+    }
+
+    // `note_failure` walks shared global state, so these run as one test
+    // rather than racing each other under the parallel test harness.
+    #[test]
+    fn the_streak_counts_distinct_tracks_and_any_success_clears_it() {
+        note_success();
+
+        // The same track failing over and over is one broken track and a
+        // user tapping play again — never a systemic verdict.
+        for _ in 0..10 {
+            assert!(!note_failure("aaaaaaaaaaa"));
+        }
+
+        assert!(!note_failure("bbbbbbbbbbb"));
+        // Third distinct id crosses the threshold.
+        assert!(note_failure("ccccccccccc"));
+        // And a repeat of one already counted doesn't inflate it further.
+        assert!(note_failure("aaaaaaaaaaa"));
+
+        // One track playing proves extraction works.
+        note_success();
+        assert!(!note_failure("ddddddddddd"));
+        note_success();
+    }
+
+    // ── Logging ───────────────────────────────────────────────────────
+
+    #[test]
+    fn the_unpinned_tier_has_a_name_in_the_journal() {
+        assert_eq!(describe(""), "yt-dlp default clients");
+        assert_eq!(describe("youtube:player_client=ios"), "youtube:player_client=ios");
+    }
 }

@@ -86,8 +86,43 @@ export default function App() {
 
   useOfflineRetry();
   useVolumeProbe();
+  useHomeAutoRefresh();
 
   return <AppShell />;
+}
+
+/** How often the Home feed re-fetches itself while the app is running.
+ *
+ *  The Pi is an appliance: it powers on with the ignition and stays up for
+ *  the whole drive, so without this the feed you saw was whatever the
+ *  boot-time `home:load` returned — potentially hours old by the time
+ *  anyone looked at it, and never updated no matter how long the car ran.
+ *  Twenty minutes is short enough that "Listen again" reflects a drive's
+ *  worth of listening and long enough to be invisible: it is roughly one
+ *  request per commute, and the response only repaints if the shelves
+ *  actually changed. */
+const HOME_REFRESH_MS = 20 * 60 * 1000;
+
+/** Refresh the Home feed on a timer, and never while offline.
+ *
+ *  The offline guard is not an optimisation. `home:load` failing marks the
+ *  feed stale, and `useOfflineRetry` already owns the offline→online edge
+ *  and refetches there — so firing into a dead network would do nothing
+ *  but raise the "showing saved" chip on a screen that was fine.
+ *
+ *  `setInterval`, not a self-rescheduling timeout: this must not drift
+ *  with how long a fetch takes, and `home:load` is already sequenced
+ *  (`homeSeq` in `lib/network.ts`), so a tick landing on top of an
+ *  in-flight request is resolved there rather than needing to be
+ *  prevented here. */
+function useHomeAutoRefresh(): void {
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!useAppStore.getState().online) return;
+      dispatchContent({ type: "home:load" });
+    }, HOME_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, []);
 }
 
 /** When to ask what the output is already set to. The PipeWire node only
