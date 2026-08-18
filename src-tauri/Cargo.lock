@@ -2105,7 +2105,7 @@ dependencies = [
 
 [[package]]
 name = "kodama-lite"
-version = "0.1.43"
+version = "0.1.45"
 dependencies = [
  "axum",
  "reqwest 0.12.28",

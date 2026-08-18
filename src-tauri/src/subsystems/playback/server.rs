@@ -89,7 +89,8 @@ struct Attempt {
     /// free: measured on the device, an authenticated request returns only
     /// storyboards — no audio at all — on every client, because YouTube
     /// expects a PO Token once it knows who you are. Anonymous requests
-    /// via `android_vr` are exempt, which is exactly why the app works.
+    /// are exempt from that particular demand, which is why the ordinary
+    /// path stays anonymous.
     /// So cookies are a LAST resort for tracks that are refused outright,
     /// never a default, and never applied to a track that would otherwise
     /// have played.
@@ -98,22 +99,43 @@ struct Attempt {
 
 /// What to try, in order.
 ///
-/// Tiers 1-3 are anonymous and unchanged: a 403 on the media URL usually
-/// means the client that did the extraction and the one fetching the bytes
-/// disagree about the token, so the useful retry is "extract it a different
-/// way". These fail independently in practice.
+/// Tiers 1-3 are anonymous: a 403 on the media URL usually means the client
+/// that did the extraction and the one fetching the bytes disagree about the
+/// token, so the useful retry is "extract it a different way". These fail
+/// independently in practice.
 ///
 /// Tier 4 is the Premium tier and is only ever reached for a track that has
 /// been refused as Premium-only. It pairs the signed-in session with
 /// `web_music` and relies on a PO Token provider being reachable — see
 /// `PREMIUM_TIER` below and the README.
+///
+/// **Reordered 2026-08-18, and the reason matters.** The ladder used to lead
+/// with `tv,android_vr` → `web_safari,mweb` → `ios,tv_embedded`. Measured on
+/// the device, *all three* now fail and nothing plays at all: the media URL
+/// those clients hand back carries no `pot=` parameter, and googlevideo has
+/// started rejecting it — no `Range` header at all is a 403, `Range: 0-…` is
+/// served, and any range not starting at zero is a 403 even as the first
+/// request on a freshly signed URL. So a download dies after roughly one
+/// chunk. `web_safari` cannot cover for it either: its formats now arrive
+/// with no URL whatsoever (YouTube forcing SABR, yt-dlp#12482), which is
+/// exactly how the walk used to fall through onto the token-less
+/// `android_vr` URL. Of eight clients tried against four different videos,
+/// only `web_music` and `web_embedded` downloaded to completion.
+///
+/// Note the cost of this order: the *normal* path now depends on a JS
+/// runtime and a reachable PO Token provider, which the old `android_vr`
+/// lead deliberately did not. A `kodama-pot` outage degrades all playback,
+/// not just Premium. `tv,android_vr` is kept as tier 3 to hedge that, and
+/// because a client YouTube has broken has historically come back.
 const ATTEMPTS: [Attempt; 4] = [
+    // `web_music` is also the client whose GVS PO Token unlocks Music
+    // Premium formats (yt-dlp#13835 demonstrates premium-only format 774
+    // arriving with exactly this pairing and being skipped without it) —
+    // hence the same client on tier 1 anonymously and tier 4 signed in.
+    Attempt { args: "youtube:player_client=web_music", cookies: false },
+    Attempt { args: "youtube:player_client=web_embedded", cookies: false },
+    // Kept as a hedge, not because it currently works. See above.
     Attempt { args: "youtube:player_client=tv,android_vr", cookies: false },
-    Attempt { args: "youtube:player_client=web_safari,mweb", cookies: false },
-    Attempt { args: "youtube:player_client=ios,tv_embedded", cookies: false },
-    // `web_music` is the client whose GVS PO Token unlocks Music Premium
-    // formats (yt-dlp#13835 demonstrates premium-only format 774 arriving
-    // with exactly this pairing and being skipped without it).
     Attempt { args: "youtube:player_client=web_music", cookies: true },
 ];
 
@@ -579,7 +601,10 @@ async fn try_download(
     //
     // and returns storyboards — which looks exactly like an auth failure
     // and is not one. `android_vr`/`tv` need no signature solving, which
-    // is precisely why the anonymous path works without any of this.
+    // is why the anonymous path used to work without any of this — but as
+    // of 2026-08-18 those clients are 403ing and `web_music` leads the
+    // ladder, so this PATH is now load-bearing for ordinary playback too,
+    // not just for Premium. See `ATTEMPTS`.
     //
     // PATH rather than `--js-runtimes` so the same environment also serves
     // the PO Token provider's script mode. A systemd user service inherits
