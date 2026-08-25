@@ -629,13 +629,32 @@ What's real:
   `scripts/build-pinyin-dict.mjs` into `public/pinyin-dict.json` — ~880KB, **fetched
   on demand** rather than bundled, so it costs nothing until someone taps 中.
 
-- **Bluetooth / car integration** (`subsystems/media.rs`, via `souvlaki`) — publishes
-  an MPRIS service on the session D-Bus, which is what a paired head unit reads over
-  AVRCP for its "now playing" text and its transport buttons. Without it a car sees
-  nothing at all, whatever the app is doing. Button presses come back up the bus as
-  `media:control` and drive the same store actions the on-screen buttons do, so the
-  car and the UI can't diverge. Needs a session D-Bus: a desktop login has one, bare
-  SSH doesn't, and the failure is logged and skipped rather than fatal.
+- **Bluetooth / car integration** (`subsystems/media.rs`, hand-written on `zbus`) —
+  publishes an MPRIS service on the session D-Bus, which is what a paired head unit
+  reads over AVRCP for its "now playing" text, its progress bar and its transport
+  buttons. Without it a car sees nothing at all, whatever the app is doing. Button
+  presses come back up the bus as `media:control` and drive the same store actions the
+  on-screen buttons do, so the car and the UI can't diverge. Needs a session D-Bus: a
+  desktop login has one, bare SSH doesn't, and the failure is logged and skipped rather
+  than fatal.
+
+  It used to use `souvlaki`, which cannot keep a head unit's progress bar honest: its
+  `PropertiesChanged` only ever carries `PlaybackStatus`, and its `Seeked` signal is
+  declared with the wrong type and emitted with no arguments. Since `bluetoothd`
+  extrapolates position between updates, a bar that never received one could only climb
+  — so replay and backward seek moved the audio on the Pi and left the Tesla's bar where
+  it was. Position is now published as a spec-correct `Seeked(x)` plus a
+  `PropertiesChanged` carrying `Position`, on discontinuities only (seek, replay, track
+  change, play/pause), and `mpris:trackid` is per-track instead of a constant. Verified
+  on the device with `dbus-monitor`: both signals reach `bluetoothd` through
+  `mpris-proxy`.
+
+- **Tesla auto-connect** (`scripts/tesla-bt-connect.sh`, installed by
+  `scripts/tesla-bt-setup.sh`) — a root service that keeps the A2DP link up and records
+  *why* it failed when it doesn't. It waits for the adapter to advertise A2DP Source and
+  AVRCP Target before its first connect, because PipeWire registers those endpoints one
+  to three seconds after `bluetoothd` starts and connecting into that gap fails with
+  `Protocol not available` while taking the car's own reconnect window down with it.
 - **Offline replay** — the stream server has always written played tracks to
   `<app-cache>/stream/<videoId>.webm` and served later plays from disk; lyrics now
   cache the same way (`lyricsStore`, whole per-source map, 300-track cap), so

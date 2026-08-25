@@ -30,6 +30,7 @@ import {
 } from "@/lib/innertube/library";
 import { hasSession } from "@/lib/innertube/shared";
 import { fetchRadio } from "@/lib/innertube/radio";
+import { logLine } from "@/lib/log";
 
 /** The Library screen's four tabs. */
 export type LibraryTab = "playlists" | "songs" | "albums" | "artists";
@@ -218,10 +219,29 @@ async function handle(command: ContentCommand): Promise<void> {
       publish({ type: "home:loading" });
       try {
         const page = await fetchHomeFeedPage();
-        if (seq !== homeSeq) return;
+        if (seq !== homeSeq) {
+          // Silent by design — but not undiagnosable. A superseded load
+          // publishes nothing at all, which means anything waiting on the
+          // outcome of *its* request waits forever; that is precisely how
+          // the startup refresher ended up timing out and retrying a feed
+          // that had in fact just been fetched.
+          logLine("Kodama Home", `Fetch #${seq} superseded by #${homeSeq}`);
+          return;
+        }
         publish({ type: "home:loaded", shelves: page.shelves });
       } catch (e) {
-        if (seq !== homeSeq) return;
+        if (seq !== homeSeq) {
+          logLine("Kodama Home", `Fetch #${seq} superseded by #${homeSeq} (after failing)`);
+          return;
+        }
+        // Logged, not just published. `homeStore` keeps this message in
+        // state and the screen deliberately never shows it (a cached feed
+        // must not be replaced by an error), so without this line a Home
+        // feed that fails on every boot is completely silent — which is
+        // exactly how the "Home shows stale content" report went
+        // undiagnosed. One line per failed attempt, and attempts are
+        // rare.
+        logLine("Kodama Home", `Fetch failed: ${errMessage(e)}`);
         publish({ type: "home:error", message: errMessage(e) });
       }
       return;

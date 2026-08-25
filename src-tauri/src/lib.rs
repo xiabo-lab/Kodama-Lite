@@ -69,9 +69,16 @@ pub fn run() {
             // would otherwise be noticed by nobody. This watcher is also
             // what gets to power-cycle a wedged USB hotspot.
             subsystems::connectivity::start(app.handle());
-            // MPRIS must be created on the main thread — souvlaki's
-            // MediaControls is neither Send nor Sync. `setup` is that
-            // thread, so this is the only place it can be built.
+            // MPRIS. No main-thread requirement any more (zbus types are
+            // Send, unlike souvlaki's MediaControls) — it runs on a thread
+            // of its own; this is just where it gets started.
+            //
+            // Deliberately before the webview has loaded anything, so our
+            // service is the first of the two MPRIS players on the bus and
+            // therefore the first `mpris-proxy` registers with bluetoothd.
+            // That ordering is the only lever there is over which player a
+            // head unit addresses — see `lib/audioEngine.ts` for why the
+            // duplicate cannot simply be removed.
             subsystems::media::init(app.handle());
             Ok(())
         })

@@ -26,6 +26,15 @@ export type AuthStatus = "signed-out" | "pending" | "signed-in";
 
 export interface AuthState {
   status: AuthStatus;
+  /** True once `auth:check` has been *answered*, either way.
+   *
+   *  `status` cannot express this: it starts at `"signed-out"`, which is
+   *  also a legitimate settled answer, so "nobody has looked yet" and
+   *  "looked, and there is no session" were indistinguishable. The Home
+   *  startup refresh waits on this so it fetches the personalized feed
+   *  rather than racing the cookie-jar read and fetching an anonymous one
+   *  that is thrown away a moment later. */
+  checked: boolean;
   account: Account | null;
   /** Last sign-in failure, cleared when a new attempt starts. */
   error: string | null;
@@ -75,6 +84,7 @@ function loadAccount(epoch: number, attempt = 0): void {
 
 export const useAuthStore = create<AuthState>((set) => ({
   status: "signed-out",
+  checked: false,
   account: null,
   error: null,
 
@@ -113,7 +123,7 @@ export const useAuthStore = create<AuthState>((set) => ({
           // answer: blanking it to null here made the sidebar flicker back
           // to "Signed in" every time the cookie jar was re-read.
           const keep = wasSignedIn ? useAuthStore.getState().account : null;
-          set({ status: "signed-in", account: keep, error: null });
+          set({ status: "signed-in", checked: true, account: keep, error: null });
           // Cosmetic and non-blocking — the app is fully signed in the
           // moment the line above runs, whether or not this ever resolves.
           loadAccount(epoch);
@@ -128,13 +138,13 @@ export const useAuthStore = create<AuthState>((set) => ({
           if (!wasSignedIn) dispatchContent({ type: "home:load" });
         } else {
           resetAuthCache();
-          set({ status: "signed-out", account: null });
+          set({ status: "signed-out", checked: true, account: null });
           if (wasSignedIn) dispatchContent({ type: "home:load" });
         }
       } else if (e.type === "auth:error") {
         sessionEpoch++;
         resetAuthCache();
-        set({ status: "signed-out", account: null, error: e.message });
+        set({ status: "signed-out", checked: true, account: null, error: e.message });
       }
     }
   },

@@ -500,3 +500,81 @@ describe("media:control volume", () => {
     expect(usePlaybackStore.getState().volume).toBeCloseTo(0.5);
   });
 });
+
+describe("positionEpoch — what makes a seek reach the car at once", () => {
+  /**
+   * The car's progress bar is re-anchored by the MPRIS push in
+   * `useAudioEngine`, and that push deliberately does NOT depend on
+   * `position` — `timeupdate` writes it about four times a second, and
+   * putting four D-Bus round trips a second on a bus `bluetoothd` listens
+   * to would be worse than the bug being fixed.
+   *
+   * `positionEpoch` is the substitute: it changes only when the position
+   * moves for a reason the audio element's own clock cannot explain. If
+   * one of these stops bumping it, the symptom is not a crash or a failing
+   * render — it is a Tesla whose bar silently lags by up to two seconds
+   * after that particular action, which is exactly the class of bug this
+   * whole area exists to fix. Hence a test per action.
+   */
+  const epoch = () => usePlaybackStore.getState().positionEpoch;
+
+  it("bumps on an explicit seek", () => {
+    usePlaybackStore.getState().playQueue([track("a")], 0);
+    const before = epoch();
+    usePlaybackStore.getState().seek(42);
+    expect(epoch()).not.toBe(before);
+    expect(usePlaybackStore.getState().position).toBe(42);
+  });
+
+  it("bumps when prev() restarts the current track", () => {
+    usePlaybackStore.getState().playQueue([track("a"), track("b")], 1);
+    usePlaybackStore.setState({ position: 30 });
+    const before = epoch();
+    usePlaybackStore.getState().prev();
+    // >3s in, so this is a replay, not a track change — the track id the
+    // car sees does not move and the position signal is the only thing
+    // telling it to go back to zero.
+    expect(usePlaybackStore.getState().index).toBe(1);
+    expect(usePlaybackStore.getState().position).toBe(0);
+    expect(epoch()).not.toBe(before);
+  });
+
+  it("bumps when repeat-one restarts the track", () => {
+    usePlaybackStore.getState().playQueue([track("a")], 0);
+    usePlaybackStore.setState({ repeat: "one", position: 100 });
+    const before = epoch();
+    usePlaybackStore.getState().next();
+    expect(usePlaybackStore.getState().position).toBe(0);
+    expect(epoch()).not.toBe(before);
+  });
+
+  it("bumps on a track change", () => {
+    usePlaybackStore.getState().playQueue([track("a"), track("b")], 0);
+    const before = epoch();
+    usePlaybackStore.getState().next();
+    expect(usePlaybackStore.getState().index).toBe(1);
+    expect(epoch()).not.toBe(before);
+  });
+
+  it("does NOT bump on the element's own clock", () => {
+    usePlaybackStore.getState().playQueue([track("a")], 0);
+    const before = epoch();
+    usePlaybackStore.getState().setPosition(1);
+    usePlaybackStore.getState().setPosition(2);
+    usePlaybackStore.getState().setPosition(3);
+    // Ordinary playback must stay silent, or the 4Hz `timeupdate` stream
+    // turns straight back into 4Hz of D-Bus traffic.
+    expect(epoch()).toBe(before);
+  });
+
+  it("gives every jump a distinct value, even back to back", () => {
+    usePlaybackStore.getState().playQueue([track("a")], 0);
+    const seen = new Set<number>();
+    for (const t of [10, 20, 30, 40]) {
+      usePlaybackStore.getState().seek(t);
+      seen.add(epoch());
+    }
+    // A timestamp would collide here; the counter must not.
+    expect(seen.size).toBe(4);
+  });
+});

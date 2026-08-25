@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { dispatch } from "@/bus/bus";
+import { logLine } from "@/lib/log";
 import { useAppStore } from "@/store/appStore";
 import { useLyricsStore } from "@/store/lyricsStore";
 import { useRadioStore } from "@/store/radioStore";
@@ -69,12 +70,19 @@ export function useAudioEngine(): void {
 
   // ── OS media controls (MPRIS → Bluetooth AVRCP → the car) ───────────
   //
-  // Pushed on track / play-state / duration change, plus a light 2s
-  // refresh while playing so the head unit's scrubber doesn't drift and
-  // a seek shows up. Not on every `timeupdate`: that's ~4 D-Bus round
+  // Pushed on track / play-state / duration change, on any *deliberate*
+  // position jump, plus a light 2s refresh while playing so a head unit's
+  // scrubber can't drift. Not on every `timeupdate`: that's ~4 D-Bus round
   // trips a second for a scrubber the client interpolates anyway.
   // Values are read imperatively so this sync never re-triggers the
   // resolve/playback effects below.
+  //
+  // `positionEpoch` is what makes a seek land *immediately* rather than
+  // within 2s. That mattered more than it sounds: the data plane decides
+  // whether to emit a `Seeked` signal by comparing the pushed position
+  // against where it predicted playback would be, so a late push is not
+  // just a late scrubber — it is a scrubber that spends up to two seconds
+  // showing the position the user seeked *away* from.
   //
   // **Nothing audible is reported as paused at 0:00** — `reportedProgress`
   // owns that rule and explains it. As soon as the element really starts,
@@ -84,6 +92,7 @@ export function useAudioEngine(): void {
   const playingForMedia = usePlaybackStore((s) => s.playing);
   const durationForMedia = usePlaybackStore((s) => s.duration);
   const startedForMedia = usePlaybackStore((s) => s.started);
+  const positionEpoch = usePlaybackStore((s) => s.positionEpoch);
   useEffect(() => {
     const push = () => {
       const s = usePlaybackStore.getState();
@@ -95,6 +104,7 @@ export function useAudioEngine(): void {
       const { elapsed, paused } = reportedProgress(s);
       dispatch({
         type: "media:update",
+        trackId: t.videoId,
         title: t.title,
         artist: t.subtitle ?? "",
         album: "",
@@ -110,7 +120,7 @@ export function useAudioEngine(): void {
     if (!playingForMedia || !startedForMedia) return;
     const id = window.setInterval(push, 2000);
     return () => window.clearInterval(id);
-  }, [track, playingForMedia, durationForMedia, startedForMedia]);
+  }, [track, playingForMedia, durationForMedia, startedForMedia, positionEpoch]);
 
   // ── The *other* MPRIS player ────────────────────────────────────────
   //
@@ -132,19 +142,48 @@ export function useAudioEngine(): void {
   // transport buttons doing nothing — a bare `<audio>` element has no
   // action handlers, so Next/Previous reach WebKit and die there.
   //
-  // Suppressing WebKit's player is possible (the `MediaSessionEnabled`
-  // runtime feature, via `webkit_settings_set_feature_enabled`) but means
-  // FFI against the webview to remove a service the platform is right to
-  // publish. Feeding it is both simpler and strictly more robust: whichever
-  // player the car addresses, it now gets correct metadata and working
-  // controls. This is also the idiomatic answer — the audio really is
-  // coming from a media element, and `navigator.mediaSession` is how a page
-  // describes it to the OS.
+  // **The duplicate cannot be removed — this was tried, on the device.**
+  // WebKitGTK 2.52.5's runtime-feature API
+  // (`webkit_settings_set_feature_enabled`) does expose the relevant
+  // flags; it reports exactly three: `MediaSession`,
+  // `MediaSessionCaptureToggleAPI` and `RemoteMediaSessionManager`.
+  // Disabling `MediaSession` genuinely removes `navigator.mediaSession`
+  // from the page, and disabling `RemoteMediaSessionManager` alongside it
+  // changes nothing either: `org.mpris.MediaPlayer2.org.webkit.…` is
+  // still registered, and `mpris-proxy` still hands it to bluetoothd. The
+  // service comes from `MediaSessionManagerGLib` on the platform side,
+  // not from the JS API, and there is no setting that reaches it.
+  //
+  // That combination — JS API gone, MPRIS player still there — is
+  // strictly the *worst* available state, because the duplicate is still
+  // addressable by the car while the code below can no longer keep it
+  // honest. So the suppression was removed again and this is the shipped
+  // behaviour: feed the duplicate, so whichever player the head unit
+  // addresses reports the right track and has working buttons.
+  //
+  // What this cannot fix is the progress bar. Measured with
+  // `dbus-monitor` across a seek, WebKit's player emits only `Metadata` —
+  // never `Position`, never `Seeked` — so a drive on which the car
+  // addresses WebKit's player still gets a bar that only climbs.
+  // `subsystems/media.rs` registers ours *first* on every boot, which is
+  // the one lever available over that race. Removing the duplicate for
+  // good means registering with `org.bluez.Media1` directly and retiring
+  // `mpris-proxy`; that is a real change to the AVRCP path and wants a
+  // car to test against before it ships.
   //
   // Guarded because the browser harness and the unit tests have no
   // `mediaSession`, and Safari/WebKit throws on unknown action names.
   useEffect(() => {
     const ms = typeof navigator !== "undefined" ? navigator.mediaSession : undefined;
+    // One line, once. If this ever says "absent", the duplicate MPRIS
+    // player is running unfed — see the note above for why that is worse
+    // than either alternative, and check what changed in WebKit.
+    logLine(
+      "Kodama Media",
+      ms
+        ? "WebKit media session present — feeding the duplicate player"
+        : "WebKit media session ABSENT — duplicate player may be running unfed",
+    );
     if (!ms) return;
     const set = (action: MediaSessionAction, handler: () => void) => {
       try {
@@ -204,20 +243,24 @@ export function useAudioEngine(): void {
     ms.playbackState = playingForMedia && startedForMedia ? "playing" : "paused";
   }, [track, playingForMedia, startedForMedia]);
 
-  // Position is pushed on the same 2s cadence as the MPRIS scrubber above
-  // rather than on `timeupdate`, for the same reason. `setPositionState`
-  // throws on a duration that isn't a finite positive number, or on a
-  // position past it — both of which happen normally while a track loads.
-  const positionForMedia = usePlaybackStore((s) => s.position);
+  // Position, on deliberate jumps only — the same rule as the MPRIS push
+  // above, and for a sharper reason than symmetry.
+  //
+  // This used to depend on `position` itself, which `timeupdate` writes
+  // about four times a second. Measured on the Pi, that made WebKit
+  // re-emit an identical `Metadata` signal at 4Hz for the whole track,
+  // every one of them forwarded into `bluetoothd` by `mpris-proxy` —
+  // hundreds of pointless AVRCP-visible events per song, carrying no
+  // position and telling the car nothing it did not already know.
+  //
+  // `setPositionState` throws on a duration that isn't a finite positive
+  // number, or on a position past it — both of which happen normally
+  // while a track loads.
   useEffect(() => {
     const ms = typeof navigator !== "undefined" ? navigator.mediaSession : undefined;
     if (!ms?.setPositionState) return;
     if (!Number.isFinite(durationForMedia) || durationForMedia <= 0) return;
-    const { elapsed } = reportedProgress({
-      started: startedForMedia,
-      playing: playingForMedia,
-      position: positionForMedia,
-    });
+    const { elapsed } = reportedProgress(usePlaybackStore.getState());
     try {
       ms.setPositionState({
         duration: durationForMedia,
@@ -227,7 +270,7 @@ export function useAudioEngine(): void {
     } catch {
       /* transient inconsistency while a track swaps — next tick fixes it */
     }
-  }, [durationForMedia, positionForMedia, startedForMedia]);
+  }, [durationForMedia, positionEpoch, startedForMedia, playingForMedia]);
 
   // ── Lyrics ──────────────────────────────────────────────────────────
   //

@@ -130,6 +130,10 @@ export function createMockTransport(): Transport {
           // No cookie jar to read in a plain browser tab.
           setTimeout(() => emit({ type: "auth:state", signedIn: false }), 60);
           break;
+        case "log:line":
+          // In a browser tab the console IS the journal, so the one in
+          // `lib/log.ts` has already shown this line.
+          break;
         case "media:update":
         case "media:clear":
           // No D-Bus in a browser tab, and nothing to fake: MPRIS is

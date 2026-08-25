@@ -33,6 +33,7 @@ pub async fn handle_command(app: AppHandle, command: Command) {
         Command::AuthSignIn => subsystems::auth::sign_in(&app),
         Command::AuthSignOut => subsystems::auth::sign_out(&app),
         Command::MediaUpdate {
+            track_id,
             title,
             artist,
             album,
@@ -41,9 +42,10 @@ pub async fn handle_command(app: AppHandle, command: Command) {
             elapsed,
             paused,
         } => subsystems::media::update(
-            &app, title, artist, album, thumbnail, duration, elapsed, paused,
+            &app, track_id, title, artist, album, thumbnail, duration, elapsed, paused,
         ),
         Command::MediaClear => subsystems::media::clear(&app),
+        Command::LogLine { scope, message } => subsystems::log_line(&scope, &message),
         Command::CacheStats => subsystems::cache::stats(&app),
         Command::CacheClear => subsystems::cache::clear(&app),
         Command::VolumeGet => subsystems::volume::get(&app),

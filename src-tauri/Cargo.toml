@@ -1,6 +1,6 @@
 [package]
 name = "kodama-lite"
-version = "0.1.48"
+version = "0.1.49"
 description = "Kodama-Lite — a fluid, decoupled YouTube Music client for the Raspberry Pi 5"
 authors = ["xiabo-lab"]
 license = "GPL-3.0-only"
@@ -50,12 +50,27 @@ tauri-plugin-http = { version = "2", default-features = false, features = [
     "http2",
     "charset",
 ] }
-# OS media controls. On Linux this publishes an MPRIS service on the
-# session D-Bus — the only thing a car head unit reads over Bluetooth
-# AVRCP for "now playing" text and transport buttons. Without it a paired
-# Tesla sees no metadata and its next/prev/play-pause do nothing, which is
-# exactly the reported symptom. See subsystems/media.rs.
-souvlaki = "0.7"
+# OS media controls: the MPRIS service on the session D-Bus, which is the
+# only thing a car head unit reads over Bluetooth AVRCP for "now playing"
+# text, its progress bar and its transport buttons.
+#
+# This was `souvlaki = "0.7"` until the Tesla progress-bar bug. That crate
+# never emits a position — its `PropertiesChanged` only ever carries
+# `PlaybackStatus`, and its `Seeked` signal is declared with the wrong type
+# and emitted with no arguments — so a head unit could only extrapolate
+# forward and never learned about a backward seek. The fix has to come from
+# the connection that owns the bus name, so it cannot be bolted on from
+# outside; see the module doc in subsystems/media.rs for the measurements.
+#
+# zbus is already in the graph (tauri-plugin-opener and
+# tauri-plugin-single-instance both pull it), so hand-writing the interface
+# costs no new dependency and drops souvlaki, dbus and dbus-crossroads —
+# along with the C libdbus link — on the way out. Left on zbus's default
+# async-io backend rather than switching it to tokio, because those two
+# plugins share the same crate and a backend swap would be theirs too; the
+# service therefore uses the blocking API on a thread of its own.
+zbus = "5"
+futures-lite = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = [
@@ -75,6 +90,7 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 # Only used to fetch the managed yt-dlp binary (ytdlp.rs) in Phase 2;
 # Phase 3's network subsystem (InnerTube) will reuse this.
 reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
+
 
 [features]
 # Tauri mobile entry point (unused on the Pi target, kept for parity).

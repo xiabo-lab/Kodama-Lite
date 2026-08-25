@@ -41,6 +41,10 @@ export type Command =
    *  Bluetooth AVRCP — see `subsystems/media.rs`. */
   | {
       type: "media:update";
+      /** Stable identity for the track (the videoId), so `mpris:trackid`
+       *  changes between songs. It was a hardcoded constant before, which
+       *  left a head unit unable to tell one track from the next. */
+      trackId: string;
       title: string;
       artist: string;
       album: string;
@@ -51,6 +55,11 @@ export type Command =
     }
   /** Tell the OS nothing is playing (queue emptied). */
   | { type: "media:clear" }
+  /** A diagnostic line, printed by the data plane so it reaches the
+   *  journal. The Pi has no devtools and webview `console.log` output goes
+   *  nowhere, so this is the only way a boot can be reconstructed after
+   *  the fact. See `lib/log.ts`. */
+  | { type: "log:line"; scope: string; message: string }
   /** How much audio is on disk, and where. */
   | { type: "cache:stats" }
   /** Delete every cached audio file. */

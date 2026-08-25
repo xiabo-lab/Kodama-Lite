@@ -57,6 +57,19 @@ interface PlaybackState {
   started: boolean;
   streamUrl?: string;
   position: number;
+  /** Bumped every time `position` moves for a reason other than the audio
+   *  element's own clock — a seek, a replay, a track load.
+   *
+   *  It exists so the MPRIS push can fire *immediately* on those, without
+   *  subscribing to `position` itself. `position` updates ~4x a second
+   *  from `timeupdate`; making that a dependency of the push would put
+   *  four D-Bus round trips a second on a bus `bluetoothd` is listening
+   *  to, for a scrubber the car interpolates anyway. This counter changes
+   *  only when the car's clock is genuinely wrong — which is exactly when
+   *  it needs telling. See `useAudioEngine`.
+   *
+   *  Ignore the value; only its identity matters. */
+  positionEpoch: number;
   duration: number;
   volume: number;
   muted: boolean;
@@ -226,6 +239,14 @@ function prefetchNext(queue: Track[], index: number): void {
 }
 
 /** Shared shape for "jump to this queue slot and start resolving it." */
+/** Monotonic source for `positionEpoch`. A counter rather than a
+ *  timestamp: two jumps inside the same millisecond must still be two
+ *  distinct values, or the effect that watches it would coalesce them. */
+let positionEpochSeq = 0;
+function bumpEpoch(): number {
+  return ++positionEpochSeq;
+}
+
 function loadTrackAt(
   set: (partial: Partial<PlaybackState>) => void,
   queue: Track[],
@@ -239,6 +260,7 @@ function loadTrackAt(
     status: "loading",
     started: false,
     position: 0,
+    positionEpoch: bumpEpoch(),
     duration: track.duration ?? 0,
     streamUrl: undefined,
     error: undefined,
@@ -262,6 +284,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
     status: "idle",
     started: false,
     position: 0,
+    positionEpoch: 0,
     duration: cached.queue[cached.index]?.duration ?? 0,
     volume: savedVolume.volume,
     muted: savedVolume.muted,
@@ -352,6 +375,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
           status: "loading",
           started: false,
           position: 0,
+          positionEpoch: bumpEpoch(),
           error: undefined,
           errorCause: undefined,
           streamUrl: undefined,
@@ -366,7 +390,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
       const { queue, index, repeat } = get();
       if (queue.length === 0) return;
       if (repeat === "one") {
-        set({ position: 0, playing: true });
+        set({ position: 0, positionEpoch: bumpEpoch(), playing: true });
         return;
       }
       let nextIndex = index + 1;
@@ -390,13 +414,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
       // >3s in, or already first: restart the current track rather than
       // actually going back — matches YTMLite.
       if (index <= 0 || position > 3) {
-        set({ position: 0 });
+        set({ position: 0, positionEpoch: bumpEpoch() });
         return;
       }
       loadTrackAt(set, queue, index - 1);
     },
 
-    seek: (seconds) => set({ position: Math.max(0, seconds) }),
+    seek: (seconds) =>
+      set({ position: Math.max(0, seconds), positionEpoch: bumpEpoch() }),
 
     setVolume: (v) => {
       const volume = Math.max(0, Math.min(1, v));

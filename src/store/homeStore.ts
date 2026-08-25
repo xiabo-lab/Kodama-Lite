@@ -18,6 +18,15 @@ interface HomeState {
    *  manual refresh with no way to show it is doing anything, so the
    *  button spins on this instead. */
   refreshing: boolean;
+  /** When a `home:loaded` last landed, in this run. Undefined until the
+   *  network has answered at least once.
+   *
+   *  Deliberately not persisted and deliberately not derivable from
+   *  `stale`: on a very first launch there is no cache, so `stale` boots
+   *  `false` and would read as "already fresh" before anything had been
+   *  fetched at all. The startup refresher needs to know that *this*
+   *  launch got real data, which is exactly what this records. */
+  lastLoadedAt?: number;
   error?: string;
   applyEvents: (events: ContentEvent[]) => void;
 }
@@ -68,6 +77,7 @@ export const useHomeStore = create<HomeState>((set, get) => {
               shelves: e.shelves,
               stale: false,
               refreshing: false,
+              lastLoadedAt: Date.now(),
               error: undefined,
             });
             saveCache(e.shelves);

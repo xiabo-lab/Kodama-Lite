@@ -34,6 +34,17 @@ pub fn ping(app: &AppHandle) {
     });
 }
 
+/// `log:line` — print a view-plane diagnostic where the journal can see
+/// it.
+///
+/// Deliberately not a general-purpose logging framework: it exists so the
+/// boot sequence can be reconstructed from `journalctl` on a panel with no
+/// devtools. Call sites are expected to be rare and about lifecycle, not
+/// about playback.
+pub fn log_line(scope: &str, message: &str) {
+    println!("[{scope}] {message}");
+}
+
 /// Quit. Synchronous and terminal by design — `exit` runs Tauri's normal
 /// shutdown (windows closed, `RunEvent::Exit` delivered) rather than
 /// `process::abort`, so the stream server's temp files still get cleaned

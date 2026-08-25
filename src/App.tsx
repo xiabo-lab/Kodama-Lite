@@ -3,6 +3,7 @@ import { dispatch, startBus } from "@/bus/bus";
 import type { AppEvent } from "@/protocol";
 import { startContentBus, dispatchContent, type ContentEvent } from "@/lib/network";
 import { handleControlCommand } from "@/lib/voiceControl";
+import { logLine } from "@/lib/log";
 import { useAppStore } from "@/store/appStore";
 import { useAuthStore } from "@/store/authStore";
 import { useCacheStore } from "@/store/cacheStore";
@@ -67,17 +68,31 @@ export default function App() {
     dispatch({ type: "connectivity:check" });
     // Re-read the webview's cookie jar. A session that survived the last
     // run makes this a silent, instant sign-in; otherwise it answers
-    // "signed out" and nothing changes. It's a local read, but still an
-    // event — so the `home:load` below genuinely does go out anonymous on
-    // a cold boot. `authStore` refetches Home when the answer comes back
-    // signed-in, which is what makes the feed personalized.
+    // "signed out" and nothing changes. `authStore` fetches Home when the
+    // answer comes back signed-in, which is what makes the feed
+    // personalized.
     dispatch({ type: "auth:check" });
     // Same reason as the two above: the data plane's boot-time `ytdlp:state`
     // is emitted from the setup hook, before this webview could possibly be
     // listening. Without asking again here, `ytdlpPhase` never leaves its
     // initial value and resume-on-startup waits forever.
     dispatch({ type: "ytdlp:check" });
-    dispatchContent({ type: "home:load" });
+    // No `home:load` here any more, and its absence is the point.
+    //
+    // It used to fire on this line, necessarily **anonymous** — the
+    // cookie-jar read above is async, so it cannot have landed yet — and
+    // on a signed-in device its result is then discarded by `homeSeq` the
+    // moment the personalized fetch comes back. On a desktop that is a
+    // wasted request. On this Pi it is not remotely free: measured on
+    // device, one `FEmusic_home` browse takes **25 to 35 seconds** end to
+    // end — a few seconds of network, and the rest carrying a
+    // multi-megabyte response across Tauri's IPC and parsing it on a Pi 5.
+    // Two of those overlapping is half a minute of the boot spent
+    // computing a feed nobody will ever see.
+    //
+    // `useHomeStartupRefresh` owns the startup fetch now: it waits for the
+    // session, adopts the load `authStore` starts if there is one, and
+    // otherwise makes the single request itself.
     return () => {
       stopBus();
       stopContentBus();
@@ -86,9 +101,224 @@ export default function App() {
 
   useOfflineRetry();
   useVolumeProbe();
+  useHomeStartupRefresh();
   useHomeAutoRefresh();
 
   return <AppShell />;
+}
+
+/** How long to wait for `auth:check` to answer before fetching Home
+ *  anyway.
+ *
+ *  The cookie-jar read is local and normally answers in well under a
+ *  second, but a boot reply that gets lost is a failure mode this app has
+ *  actually had (see `tauriTransport`), and waiting forever on it would
+ *  trade a stale feed for no feed. Eight seconds is long enough that the
+ *  normal case never hits it and short enough that the pathological one
+ *  still ends with fresh — if anonymous — content on screen. */
+const AUTH_SETTLE_GRACE_MS = 8_000;
+
+/** Backoff between startup refresh attempts, in ms. Measured from when an
+ *  attempt *finishes*, not when it starts — see the deadline note below.
+ *  Runs out after eight tries, at which point `useHomeAutoRefresh`'s
+ *  20-minute timer and `useOfflineRetry`'s connectivity edge are the
+ *  remaining backstops. */
+const STARTUP_RETRY_MS = [2_000, 5_000, 10_000, 20_000, 30_000, 60_000, 60_000, 60_000];
+
+/** How long to wait for an attempt to settle before giving up on hearing
+ *  about it.
+ *
+ *  A backstop, and it has to clear the real thing by a wide margin. This
+ *  was 20s on the reasoning that `lib/http.ts` caps a request at 15s —
+ *  which is true and still missed, because the 15s covers the HTTP
+ *  exchange and not what follows it. Measured on the Pi, a single
+ *  `FEmusic_home` browse settles in **25 to 35 seconds**: a few seconds of
+ *  network, then a multi-megabyte JSON body crossing Tauri's IPC and being
+ *  parsed and mapped on a Pi 5. A 20s deadline therefore fired *during*
+ *  every healthy fetch and queued a retry that superseded it — the retry
+ *  loop reliably outrunning its own success, three times in a row in the
+ *  journal.
+ *
+ *  45s is comfortably past the slow end of that range. It should never
+ *  fire; it exists so a dropped event cannot wedge the loop permanently. */
+const ATTEMPT_DEADLINE_MS = 45_000;
+
+/**
+ * Guarantee exactly one *successful* Home refresh per launch.
+ *
+ * The reported bug: after a Pi boot the Home feed showed the previous
+ * run's content, and only opening another screen and coming back put it
+ * right. Nothing on the way back to Home refetches anything, so the
+ * navigation was not the cure — it was the delay.
+ *
+ * What actually happens is that Home's fetch is dispatched **exactly
+ * twice** per launch, both inside the boot window: once from the mount
+ * effect above (anonymous, because the cookie-jar read is async and cannot
+ * have landed yet) and once from `authStore` when `auth:state` comes back
+ * signed-in. Neither is retried, and worse, they collide — `homeSeq` in
+ * `lib/network.ts` discards whichever finishes first, by design, so the
+ * personalized second request is the *only* one that can paint. If it
+ * fails, or simply loses its race, the screen keeps its localStorage
+ * shelves and raises the "showing saved" chip, and the next thing that
+ * would have refreshed the feed is the 20-minute timer. On a car panel
+ * that is the whole drive. Reproduced on the device: the Pi's Home showed
+ * "showing saved" while `curl` from the same machine got HTTP 200 from
+ * InnerTube in 5.6s.
+ *
+ * So: wait until the app is genuinely ready, ask once, and keep asking
+ * until the network actually answers. The mechanism is the existing
+ * `home:load` — the same command the refresh button and the 20-minute
+ * timer send — not a second refresh path.
+ *
+ * Two things this must not do, both learned the hard way:
+ *
+ *   * **Fire on a fixed timer.** Retrying every 2s against a fetch that
+ *     takes ~6s means every attempt bumps `homeSeq` and invalidates the
+ *     one still in flight, so the loop reliably outruns its own success.
+ *     Each attempt therefore waits for its predecessor to *settle* before
+ *     the backoff even starts.
+ *   * **Race the cookie jar.** Waiting on `authStore.checked` is what
+ *     stops this from being a third redundant anonymous request: by the
+ *     time it fires, the session is in place.
+ */
+function useHomeStartupRefresh(): void {
+  useEffect(() => {
+    logLine("Kodama Home", "Startup refresh requested");
+
+    // Two timers, deliberately not one. They belong to different phases —
+    // "poll until the app is ready" and "wait out / back off an attempt" —
+    // and sharing a variable between them let a load started by somebody
+    // else re-arm the deadline while we were still in the waiting phase.
+    // With `attempt` still 0, `settled()` then walked off the front of the
+    // backoff table and declared defeat 20 seconds into a boot, without
+    // ever having made a single request. Measured, in exactly those words:
+    // "Waiting for music service" at 22:16:36, "gave up" at 22:16:56.
+    let waitTimer: number | undefined;
+    let attemptTimer: number | undefined;
+    let attempt = 0;
+    /** True only between dispatching a `home:load` and hearing how it
+     *  went. Everything the store subscription does is gated on it, so
+     *  activity that isn't ours can never advance our state machine. */
+    let inFlight = false;
+    let waitingLogged = false;
+    let done = false;
+    const startedAt = Date.now();
+
+    const clearTimers = () => {
+      if (waitTimer !== undefined) window.clearTimeout(waitTimer);
+      if (attemptTimer !== undefined) window.clearTimeout(attemptTimer);
+      waitTimer = undefined;
+      attemptTimer = undefined;
+    };
+
+    const ready = () => {
+      const app = useAppStore.getState();
+      if (!app.netChecked || !app.online) return false;
+      // Auth is a soft gate: a lost `auth:check` reply must not cost the
+      // feed entirely, so the grace window releases it.
+      if (useAuthStore.getState().checked) return true;
+      return Date.now() - startedAt >= AUTH_SETTLE_GRACE_MS;
+    };
+
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimers();
+      unsubscribe();
+      logLine("Kodama Home", "Home data refreshed successfully");
+    };
+
+    const fire = () => {
+      if (done) return;
+      waitTimer = undefined;
+      if (!ready()) {
+        if (!waitingLogged) {
+          logLine("Kodama Home", "Waiting for music service");
+          waitingLogged = true;
+        }
+        // Not being ready yet is not a failed attempt, so it does not
+        // consume a backoff slot.
+        waitTimer = window.setTimeout(fire, 1_000);
+        return;
+      }
+      attempt += 1;
+      inFlight = true;
+      // Adopt a load that is already running rather than starting a
+      // second one. On a signed-in boot `authStore` dispatches its own
+      // `home:load` the moment the cookie jar answers, which is normally
+      // a beat before this hook is released by the same event — so on the
+      // happy path the startup refresh costs **zero** extra requests and
+      // this only supervises the one already in flight. It matters
+      // because a duplicate would not merely be wasteful: `homeSeq` would
+      // discard the older of the two, throwing away half a minute of work
+      // on a device where that is what a home feed costs.
+      if (useHomeStore.getState().refreshing) {
+        logLine("Kodama Home", `Fetching latest content (attempt ${attempt}, adopted)`);
+      } else {
+        logLine("Kodama Home", `Fetching latest content (attempt ${attempt})`);
+        dispatchContent({ type: "home:load" });
+      }
+      attemptTimer = window.setTimeout(attemptOver, ATTEMPT_DEADLINE_MS);
+    };
+
+    /** This attempt ended without a `home:loaded`. Back off and try again. */
+    const attemptOver = () => {
+      if (done || !inFlight) return;
+      inFlight = false;
+      if (attemptTimer !== undefined) window.clearTimeout(attemptTimer);
+      attemptTimer = undefined;
+      const delay = STARTUP_RETRY_MS[attempt - 1];
+      if (delay === undefined) {
+        // Everything is still on screen from cache and the periodic
+        // refresh remains armed; say so once rather than failing silently.
+        logLine(
+          "Kodama Home",
+          "Startup refresh gave up; cached content is still showing",
+        );
+        done = true;
+        unsubscribe();
+        return;
+      }
+      attemptTimer = window.setTimeout(fire, delay);
+    };
+
+    // Driven by the store rather than polled, so a load triggered by
+    // anything else — authStore's refetch, the offline edge, the user
+    // pressing refresh — also satisfies this and stops the retries. One
+    // successful refresh is the goal, not one made by us.
+    const unsubscribe = useHomeStore.subscribe((s, prev) => {
+      if (done) return;
+      if (s.lastLoadedAt !== prev.lastLoadedAt && s.lastLoadedAt !== undefined) {
+        finish();
+        return;
+      }
+      if (!inFlight) return;
+      // Someone else started a load on top of ours. `homeSeq` discards a
+      // superseded request without publishing anything, so our own
+      // attempt's outcome will now never arrive — wait for theirs instead
+      // of counting down against it and queueing a pointless retry.
+      if (!prev.refreshing && s.refreshing) {
+        if (attemptTimer !== undefined) window.clearTimeout(attemptTimer);
+        attemptTimer = window.setTimeout(attemptOver, ATTEMPT_DEADLINE_MS);
+        return;
+      }
+      // A revalidate that started and ended without loading anything is a
+      // failed attempt — react to it now instead of waiting out the
+      // deadline.
+      if (prev.refreshing && !s.refreshing) attemptOver();
+    });
+    if (useHomeStore.getState().lastLoadedAt !== undefined) {
+      finish();
+      return;
+    }
+
+    fire();
+    return () => {
+      done = true;
+      clearTimers();
+      unsubscribe();
+    };
+  }, []);
 }
 
 /** How often the Home feed re-fetches itself while the app is running.

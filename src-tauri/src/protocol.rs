@@ -51,6 +51,17 @@ pub enum Command {
     /// Bluetooth AVRCP.
     #[serde(rename = "media:update")]
     MediaUpdate {
+        /// Stable per-track identity (the videoId), so `mpris:trackid` can
+        /// actually change between songs. It used to be the constant `/`,
+        /// which left a head unit unable to tell one track from the next
+        /// and its progress bar with nothing to re-anchor on.
+        // The view plane speaks camelCase; this enum has no `rename_all`,
+        // so the rename is per-field as it is for `videoId` above.
+        // Getting it wrong is silent — `default` fills in an empty string
+        // and `mpris:trackid` quietly becomes the "no track" sentinel,
+        // which is exactly what the first build on the device did.
+        #[serde(rename = "trackId", default)]
+        track_id: String,
         title: String,
         artist: String,
         album: String,
@@ -61,6 +72,16 @@ pub enum Command {
     },
     #[serde(rename = "media:clear")]
     MediaClear,
+    /// A diagnostic line from the view plane, printed to stdout so it
+    /// lands in the journal beside the data plane's own.
+    ///
+    /// The Pi is a headless appliance with no devtools and no visible
+    /// console — `console.log` in the webview reaches nothing at all
+    /// (verified: an entire boot's worth of the app's journal is Rust
+    /// output only). Anything worth diagnosing a boot with therefore has
+    /// to cross the bus to be seen.
+    #[serde(rename = "log:line")]
+    LogLine { scope: String, message: String },
     #[serde(rename = "cache:stats")]
     CacheStats,
     #[serde(rename = "cache:clear")]
