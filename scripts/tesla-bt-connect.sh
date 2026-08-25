@@ -10,77 +10,142 @@
 #   journalctl -u tesla-bt-connect -p warning -S today   # just the failures
 #
 # ─────────────────────────────────────────────────────────────────────
-# THE BOOT RACE THIS EXISTS TO CLOSE (measured 2026-08-24)
+# WHY THIS DOES NOT CONNECT — AND WHY THAT IS THE FIX
 # ─────────────────────────────────────────────────────────────────────
 #
-# On 5 consecutive boots, the FIRST connect attempt failed the same way:
+# This script used to page the car every few seconds until it answered.
+# That is exactly backwards for this car, and it was the reason
+# auto-connect "worked less than half the time".
 #
-#   17:21:06  bluetoothd 5.82 starts; this script starts
-#   17:21:07  bluetoothd: a2dp-sink profile connect failed for <car>:
-#                         Protocol not available
-#   17:21:08  wireplumber starts
+# Two facts, both measured across four consecutive boots on a real drive
+# (2026-08-25, journal boots -3..0), with the car awake and in use:
+#
+#   1. THE TESLA REFUSES EVERY PI-INITIATED LINK. About fifty attempts,
+#      all `br-connection-refused` / `avdtp_connect_cb: Connection refused
+#      (111)`, while `hcitool name` was answering "Tesla Model Y 阿快" on
+#      the same radio in the same second. Not one has ever succeeded. This
+#      is the car's policy about who may initiate, and no amount of
+#      retrying changes it. (First seen 2026-07-30 with the car parked and
+#      written off as "it is asleep"; this drive proves it is not that.)
+#
+#   2. OUR RETRYING WAS WHAT KEPT THE CAR OUT. A controller that is paging
+#      is not page-SCANNING, so every attempt we made was a window in
+#      which the Tesla's own attempt could not be heard. The car gives up
+#      after about five tries.
+#
+#      boot -3   paged every 5-8s, never stopped   -> never connected
+#      boot -2   paged, then backed off to 44s     -> connected 60s after
+#                                                     our last page
+#      boot -1   paged, then backed off to 40s     -> connected 61s after
+#                                                     our last page
+#      boot  0   never paged at all (it happened   -> connected 3 SECONDS
+#                to be waiting for the audio          after the radio came
+#                stack)                               up
+#
+#      The car connects the moment it gets a quiet radio, and not before.
+#
+# So the default mode is LISTEN: power the adapter, make sure the bond is
+# trusted and the A2DP endpoints exist, then say nothing and let the car
+# do what it is going to do anyway. Outbound connecting is still available
+# behind TESLA_CONNECT_MODE=initiate for a different head unit that needs
+# it — this refusal is one car's policy, not a universal one.
+#
+# ─────────────────────────────────────────────────────────────────────
+# THE OTHER BOOT RACE (still closed, still relevant)
+# ─────────────────────────────────────────────────────────────────────
+#
+# PipeWire registers the A2DP endpoints with bluetoothd one to three
+# seconds AFTER bluetoothd starts, because WirePlumber lives in the user
+# session and a system unit cannot be ordered against it:
+#
+#   17:21:06  bluetoothd 5.82 starts
 #   17:21:09  bluetoothd: Endpoint registered: /MediaEndpoint/A2DPSource/sbc
 #
-# The script was connecting one to two seconds before **PipeWire had
-# registered any A2DP endpoint with bluetoothd**. With no local endpoint
-# there is no A2DP to offer, so BlueZ refuses its own connect with
-# `br-connection-profile-unavailable`. The old classifier called that
-# "CAR — link came up but no A2DP profile was offered", which pointed the
-# blame at exactly the wrong end for weeks.
-#
-# The connect-level cost of that is small — the retry a few seconds later
-# succeeds. The REAL cost is what it does to the car's own reconnect: the
-# Pi pages the car, takes an ACL link up, fails the profile and drops it,
-# all inside the window where the Tesla is trying to reconnect on its own.
-# A head unit that gets a failed profile connect stops trying and waits for
-# a human to press Connect, which is the reported "auto-connect works less
-# than half the time".
-#
-# So: nothing is attempted until the adapter actually advertises A2DP
-# Source (0000110a) and AVRCP Target (0000110c). Those UUIDs appear on
-# /org/bluez/hciN exactly when PipeWire's endpoints land, which makes them
-# the authoritative "the audio stack is ready" signal — far better than
-# sleeping and hoping.
+# Until those exist there is no A2DP to offer, so a connection attempt in
+# that window fails with `Protocol not available` — in EITHER direction.
+# An inbound attempt from the car that lands there is a wasted one of its
+# five. Nothing is reported as ready until the adapter actually advertises
+# A2DP Source (0000110a) and AVRCP Target (0000110c), which appear exactly
+# when those endpoints land.
 #
 # ─────────────────────────────────────────────────────────────────────
-# THE SECOND HALF: Trusted=false
+# THE THIRD ONE: Trusted=false
 # ─────────────────────────────────────────────────────────────────────
 #
-# The bond has read `Trusted=false` on every boot since it was made. An
-# untrusted device's *incoming* profile connections need an agent to
+# The bond read `Trusted=false` on every boot since it was made. An
+# untrusted device's INCOMING profile connections need an agent to
 # authorise them, and this Pi runs none (no bt-agent, no interactive
-# bluetoothctl). So when the car initiates — the direction that actually
-# works reliably on this car — BlueZ has nobody to ask and the connection
-# is refused. Trusting the device removes the authorisation step entirely.
-#
-# This does NOT re-pair and does NOT touch the link key: it flips one flag
-# in /var/lib/bluetooth/<adapter>/<device>/info, which bluetoothd persists.
+# bluetoothctl) — so the car's own connection, the only kind that works
+# here, had nobody to answer for it. Set to true below if it is ever
+# found false. That writes one flag in
+# /var/lib/bluetooth/<adapter>/<device>/info; it does NOT re-pair and does
+# NOT touch the link key.
 #
 # ─────────────────────────────────────────────────────────────────────
-# HOW TO READ A FAILURE LINE
+# HOW FAST CAN THIS POSSIBLY BE? (measured 2026-08-25)
 # ─────────────────────────────────────────────────────────────────────
 #
-# Each one carries the BlueZ error, a verdict, and sometimes a probe result:
+# Tesla pages its priority device when the car wakes and gives up after
+# about five tries, so the only thing that matters is whether the Pi is
+# listening in time. An iPhone always is, because it never turned off. The
+# Pi is powered by the car and starts from nothing, so this is a race.
 #
-#   br-connection-page-timeout   the car never answered            → CAR
-#   br-connection-refused        the car answered and said no      → CAR
-#   br-connection-profile-unavailable  usually OUR endpoints       → PI
-#   InProgress / NotReady        our own adapter                   → PI
-#   UnknownObject                no bond on this adapter           → PI
+# Where the time actually goes, from `journalctl -b -o short-monotonic`:
 #
-# `br-connection-refused` alone is too vague — it covers "busy", "asleep"
-# and "refuses this address" — so on the first failure of a streak (and
-# whenever the error changes) we also ask the car its name over the air. A
-# name coming back means the car is AWAKE AND REFUSING; silence means it
-# isn't reachable. That pair is what separates "the car is asleep" from
-# "something is already using the car's Bluetooth", which is the likeliest
-# remaining cause of an intermittent no-connect: a phone that won the race
-# to the head unit.
+#   2.44s  kernel done
+#   4.42s  Bluetooth core + HCI UART driver loaded
+#   4.77s  hci0: BCM4345C0 detected
+#   4.78s  loading firmware patch BCM4345C0...hcd
+#   5.45s  firmware patch DONE          <- the radio does not exist before this
+#   5.45s  bluetoothd starts
+#   7.04s  user@1000 (PipeWire/WirePlumber live here)
+#   7.97s  A2DP endpoints registered with bluetoothd
+#   8.92s  TESLA-BT READY
 #
-# For the cases even that can't split, capture HCI status codes directly:
+# Two things follow, and they are worth knowing before optimising again:
+#
+#   * **bluetoothd is already starting as soon as the controller exists.**
+#     There is nothing to win by starting it earlier — the gate is a 675ms
+#     Broadcom firmware patch load that finishes at 5.45s. A target of
+#     "connectable in under 3 seconds" is not reachable on this hardware
+#     without kernel-level work.
+#
+#   * The remaining ~2.5s is the audio stack, which lives in the user
+#     session. `cloud-init` was removed from bluetoothd's critical path,
+#     linger was enabled, and the user manager's wait on `network.target`
+#     was cut — together worth only ~0.2s, because the ordering edge is
+#     declared by `systemd-user-sessions.service` (`Before=user@1000`) and
+#     a drop-in on the far side cannot remove it.
+#
+# The gap between "connectable" (5.45s) and "A2DP ready" (7.97s) WAS a
+# danger zone: the car could complete an ACL there and then fail on profile
+# with `Protocol not available`, burning one of its five attempts. Since
+# shrinking it proved to be worth only ~0.2s, the gap is closed from the
+# other end instead — the radio is held dark until the audio stack is
+# ready:
+#
+#   controller -> bluetoothd -> PipeWire/WirePlumber -> A2DP + AVRCP
+#   -> ONLY NOW connectable -> Tesla connects -> audio works immediately
+#
+# The Pi becomes reachable slightly later, but every page it answers is one
+# it can finish. A page timeout reads as "not here yet" and gets retried; a
+# failed profile connect reads as "here and broken". See `gate_until_ready`,
+# and note it needs `AutoEnable=false` in main.conf to have a say.
+#
+# ─────────────────────────────────────────────────────────────────────
+# HOW TO READ A FAILURE LINE (initiate mode only)
+# ─────────────────────────────────────────────────────────────────────
+#
+#   br-connection-page-timeout   the car never answered            -> CAR
+#   br-connection-refused        the car answered and said no      -> CAR
+#   br-connection-profile-unavailable  usually OUR endpoints       -> PI
+#   InProgress / NotReady        our own adapter                   -> PI
+#   UnknownObject                no bond on this adapter           -> PI
+#
+# For the cases those cannot split, capture HCI status codes directly:
 #   sudo timeout 20 btmon | grep Status:
 # `Connection Rejected due to Unacceptable BD_ADDR (0x0f)` is the car's
-# policy on who may initiate, and no amount of retrying changes it.
+# policy on who may initiate.
 #
 # DESIGN NOTES
 #   * Everything is addressed by BD_ADDR, never by hci index. Plugging a USB
@@ -95,7 +160,9 @@
 #     known cause of the A2DP stuttering. It would trade a connect problem
 #     for an audio one.
 #   * Disconnects are noticed from a BlueZ D-Bus signal rather than by polling,
-#     so a mid-drive drop is seen at once instead of up to 60s later.
+#     so a mid-drive drop is seen at once instead of up to 60s later. In
+#     listen mode noticing is ALL that happens — see the top of this file
+#     for why chasing a disconnect is what caused the bug.
 #   * The profile is checked, not just the connection. The documented failure
 #     mode is a link that connects fine and lands on headset-head-unit (HFP)
 #     instead of a2dp-sink: silence, no track info, dead transport buttons,
@@ -106,10 +173,9 @@
 #     automatically off a heuristic that has not yet been seen to trigger.
 #   * ONE device, by address. Nothing here enumerates or touches any other
 #     paired device, so a phone or a speaker can be used normally.
-#   * A disconnect is given a grace period before we chase it. Pressing
-#     Disconnect on the car's screen must not start a tug-of-war, and
-#     `touch /run/tesla-bt-hold` suspends reconnection entirely for as long
-#     as the file exists.
+#   * Listen mode cannot fight a deliberate Disconnect on the car's screen,
+#     because it never initiates anything. `touch /run/tesla-bt-hold` still
+#     suspends initiate mode for as long as the file exists.
 
 set -uo pipefail
 
@@ -117,6 +183,17 @@ MAC="${TESLA_MAC:-4C:FC:AA:55:B0:60}"
 ADAPTER="${TESLA_ADAPTER:-2C:CF:67:58:CF:FE}"   # built-in Broadcom; the car lives here
 PW_USER="${TESLA_PW_USER:-fuwenxu}"             # PipeWire runs in the user session,
 PW_UID="${TESLA_PW_UID:-1000}"                  # this script runs as root
+
+# listen   — never page the car; just be ready and let it connect. The
+#            default, and the only mode that works on this Tesla.
+# initiate — the old behaviour: page the car on a backoff. Kept for a
+#            different head unit that actually accepts inbound links.
+MODE="${TESLA_CONNECT_MODE:-listen}"
+
+# How often to say "still waiting" in listen mode. Rare on purpose: this
+# runs for the length of every drive, and a heartbeat that scrolls is a
+# heartbeat nobody reads.
+IDLE_REPORT_SEC="${TESLA_IDLE_REPORT_SEC:-600}"
 
 # Backoff. Fast while the car is plausibly still waking with the ignition,
 # then geometric so a car that is simply not there costs one page a minute
@@ -133,6 +210,25 @@ DISCONNECT_GRACE_SEC="${TESLA_DISCONNECT_GRACE_SEC:-20}"
 # Generous: on a cold boot the user session starts well after bluetoothd.
 AUDIO_READY_TIMEOUT_SEC="${TESLA_AUDIO_READY_TIMEOUT_SEC:-120}"
 HOLD_FILE="${TESLA_HOLD_FILE:-/run/tesla-bt-hold}"
+
+# Hold the radio dark until the audio stack can actually service a link.
+#
+# `AutoEnable=false` in main.conf keeps the adapter powered off at boot, and
+# this script powers it on only once A2DP Source and AVRCP Target are
+# registered. See the header for why. Set to 0 to go back to "connectable
+# the moment bluetoothd starts".
+GATE_CONNECTABLE="${TESLA_GATE_CONNECTABLE:-1}"
+
+# Failsafe. If the audio stack never arrives, power the radio on anyway
+# after this long: a Pi whose Bluetooth is merely degraded is worth far
+# more than a Pi whose Bluetooth does not exist, and a car that connects
+# and gets no audio is at least diagnosable from the driver's seat.
+GATE_MAX_WAIT_SEC="${TESLA_GATE_MAX_WAIT_SEC:-45}"
+
+# How many 200ms ticks to wait for the adapter to appear before giving up
+# and letting the main loop cope. 150 = 30s, far longer than the ~0.5s the
+# firmware patch actually needs.
+ADAPTER_WAIT_SEC="${TESLA_ADAPTER_WAIT_TICKS:-150}"
 
 # A2DP Source and AVRCP Target. Their presence on the adapter is what says
 # PipeWire has registered its media endpoints with bluetoothd.
@@ -167,13 +263,52 @@ bluez_prop() {
 
 is_connected() { [ "$(bluez_prop "$1" org.bluez.Device1 Connected)" = "true" ]; }
 
+# BlueZ's own `Connectable` bookkeeping was found reading false while the
+# controller was in fact page-scanning. The controller is the truth, so
+# nothing was actually broken — but a property BlueZ believes is false is
+# one it may act on later and drop PSCAN, which would leave the car unable
+# to reach us at all. Assert it. This restores LOCAL state only and never
+# reaches for the car.
+ensure_connectable() {
+  local a="/org/bluez/$1"
+  [ "$(bluez_prop "$a" org.bluez.Adapter1 Connectable)" = "true" ] && return 0
+  busctl set-property org.bluez "$a" org.bluez.Adapter1 Connectable b true >/dev/null 2>&1
+  if [ "$(bluez_prop "$a" org.bluez.Adapter1 Connectable)" = "true" ]; then
+    log "adapter marked Connectable (BlueZ had it false while the radio was page-scanning)"
+  else
+    warn "could not set Connectable — the car may be unable to reach us"
+  fi
+}
+
+# Power the adapter DOWN. Used only at startup, and only while gating: a
+# powered-off controller does not page-scan, so the car's early attempts
+# time out instead of completing an ACL we cannot finish.
+power_off() {
+  busctl set-property org.bluez "/org/bluez/$1" org.bluez.Adapter1     Powered b false >/dev/null 2>&1
+}
+
+# Poll at 100ms, not 1s.
+#
+# The old shape was check / set / `sleep 1` / repeat, so a controller that
+# came up in ~150ms was still reported as down for a whole second.
+# Harmless when this only ran at boot beside an already-powered radio - but
+# the gate now calls it at the exact moment the Pi becomes reachable to the
+# car, so that second was a second of Tesla's connect window spent on a
+# `sleep`. Measured: 1.16s between "powering on" and "connectable", almost
+# all of it here.
+#
+# The set is re-issued periodically rather than once, because a
+# set-property landing while bluetoothd is still settling can be dropped,
+# and being stubborn about that is this function's whole job.
 ensure_powered() {
   local hci="$1" tries=0
-  while [ "$tries" -lt 30 ]; do
+  hciconfig "$hci" 2>/dev/null | grep -q 'UP RUNNING' && return 0
+  while [ "$tries" -lt 300 ]; do
+    if [ $((tries % 20)) -eq 0 ]; then
+      busctl set-property org.bluez "/org/bluez/$hci" org.bluez.Adapter1 Powered b true >/dev/null 2>&1
+    fi
     hciconfig "$hci" 2>/dev/null | grep -q 'UP RUNNING' && return 0
-    busctl set-property org.bluez "/org/bluez/$hci" org.bluez.Adapter1 \
-      Powered b true >/dev/null 2>&1
-    sleep 1
+    sleep 0.1
     tries=$((tries + 1))
   done
   return 1
@@ -192,6 +327,122 @@ audio_stack_ready() {
   case "$uuids" in *"$UUID_A2DP_SOURCE"*) ;; *) return 1 ;; esac
   case "$uuids" in *"$UUID_AVRCP_TARGET"*) ;; *) return 1 ;; esac
   return 0
+}
+
+# Has WirePlumber's bluez5 monitor loaded? That is the moment the A2DP
+# endpoints get registered with bluetoothd, and unlike the adapter's UUID
+# list it is observable with the controller powered off.
+#
+# Scoped to a `bluez` node rather than the string "bluez5" anywhere in the
+# dump: `bluez_midi.server` is created by the same plugin load and is
+# present whether or not any device is connected, which makes it exactly
+# the "the monitor is up" signal wanted here.
+bluez5_monitor_loaded() {
+  sudo -u "$PW_USER" env XDG_RUNTIME_DIR="/run/user/$PW_UID"     timeout 5 pw-dump 2>/dev/null | grep -q '"node\.name": *"bluez'
+}
+
+# Block until our adapter exists.
+#
+# `bluetoothd` can start BEFORE the kernel has finished loading the
+# Broadcom firmware patch — measured on one boot at bluetoothd 4.72s
+# against hci0 ready at 5.23s. The preflight then found no adapter, logged
+# it, and fell through to the main loop, which powers the radio on with no
+# gate at all. That is the very race this script exists to close, so it
+# must not be left to luck: 9 of 10 boots happened to go the other way,
+# which is exactly the kind of "usually fine" that produced the original
+# bug report.
+wait_for_adapter() {
+  local waited=0 hci
+  while [ "$waited" -lt "$ADAPTER_WAIT_SEC" ]; do
+    hci=$(adapter_hci)
+    if [ -n "$hci" ]; then
+      [ "$waited" -gt 0 ] && log "adapter $ADAPTER appeared after ${waited}s (kernel firmware load)"
+      echo "$hci"
+      return 0
+    fi
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
+# Bring the Pi up in the right ORDER:
+#
+#   controller -> bluetoothd -> PipeWire/WirePlumber -> A2DP + AVRCP
+#   -> only now connectable -> Tesla connects -> audio works immediately
+#
+# The alternative, which is what shipped before, is to be connectable from
+# the moment bluetoothd starts (5.45s) while the endpoints do not exist
+# until 7.97s. A car that pages in that window completes an ACL and then
+# fails AVDTP with `Protocol not available` — and Tesla only tries about
+# five times before giving up for good. Answering a page we cannot service
+# is strictly worse than not answering it: a page timeout looks like "not
+# here yet" and gets retried, a failed profile connect looks like "here and
+# broken".
+#
+# Requires `AutoEnable=false`, or bluetoothd powers the adapter on before
+# we get a say.
+gate_until_ready() {
+  local hci="$1" waited=0
+  if [ "$GATE_CONNECTABLE" != "1" ]; then
+    ensure_powered "$hci"
+    wait_for_audio_stack "$hci"
+    return
+  fi
+
+  # NEVER power-cycle a radio that is already working. This service is
+  # Restart=always, so it re-runs mid-drive after any hiccup — and taking
+  # the adapter down there would drop a live A2DP link to the car, which
+  # the car would then have to re-establish on a policy that only lets it
+  # try about five times. Gating is a COLD-START behaviour: if the audio
+  # stack is already up, there is nothing to gate and nothing to fix.
+  if audio_stack_ready "$hci" || is_connected "/org/bluez/$hci/dev_$MAC_PATH"; then
+    log "audio stack already up (service restart, not a cold boot) — leaving the radio alone"
+    ensure_powered "$hci"
+    ensure_connectable "$hci"
+    return 0
+  fi
+
+  power_off "$hci"
+  log "radio held dark until the audio stack is ready (no half-working link for the car to waste an attempt on)"
+
+  # TWO readiness signals, because it is not established that the first one
+  # works from a dark radio.
+  #
+  # `audio_stack_ready` reads the A2DP Source / AVRCP Target UUIDs off the
+  # ADAPTER, and BlueZ may only publish those once the controller is
+  # powered — in which case, while gating, it would never become true and
+  # every boot would burn the full failsafe with the radio dark. That would
+  # be worse than the problem being fixed.
+  #
+  # So the PipeWire side is accepted as well: once WirePlumber's bluez5
+  # monitor has loaded, the endpoints have been registered with bluetoothd,
+  # and that is visible in `pw-dump` regardless of adapter power. Whichever
+  # answers first opens the gate; the report afterwards says which.
+  while [ "$waited" -lt "$GATE_MAX_WAIT_SEC" ]; do
+    if audio_stack_ready "$hci" || bluez5_monitor_loaded; then
+      log "audio stack ready after ${waited}s — powering the radio on"
+      ensure_powered "$hci"
+      ensure_connectable "$hci"
+      # Now that the controller is up the adapter must really be
+      # advertising both profiles. If it is not, say so loudly rather than
+      # reporting a readiness that is not there.
+      if audio_stack_ready "$hci"; then
+        log "A2DP Source + AVRCP Target confirmed on $hci"
+        log "AVRCP ready"
+      else
+        warn "powered on but $hci still does not advertise A2DP Source + AVRCP Target — the car will connect and get no audio"
+      fi
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  err "no A2DP endpoint after ${GATE_MAX_WAIT_SEC}s — powering on anyway; the car may connect with no audio"
+  ensure_powered "$hci"
+  ensure_connectable "$hci"
+  return 1
 }
 
 # Block until the audio stack is ready, or the cap expires.
@@ -372,6 +623,38 @@ wait_for_bluez_event() {
   fi
 }
 
+# ── readiness report ──────────────────────────────────────────────────
+
+# Seconds since boot, to 3dp. /proc/uptime is monotonic and immune to the
+# NTP step this Pi takes early in every boot (it has no RTC battery), which
+# makes wall-clock timestamps useless for measuring the boot race.
+mono() { awk '{ printf "%.3f", $1 }' /proc/uptime; }
+
+# One line that answers "was the Pi ready before the car gave up?" without
+# needing any other log. Everything Tesla needs is on it, so a failed drive
+# can be diagnosed from a single grep:
+#
+#   journalctl -b -u tesla-bt-connect | grep TESLA-BT
+#
+# Deliberately emitted once, at the moment readiness is reached, rather
+# than sampled — the value being reported IS the time it happened.
+ready_report() {
+  local hci="$1" dev="/org/bluez/$hci/dev_$MAC_PATH" uuids act psi psw pst yes_a2dp yes_avrcp
+  uuids=$(busctl get-property org.bluez "/org/bluez/$hci" org.bluez.Adapter1 UUIDs 2>/dev/null)
+  # Read straight from the controller: the config file says what we asked
+  # for, this says what we got. Bytes are
+  #   <ncmd> <op-lo> <op-hi> <status> <int-lo> <int-hi> <win-lo> <win-hi>
+  # and the hex is converted in bash, because Debian's awk is mawk and has
+  # no `strtonum` — which silently reported both values as 0.
+  act=$(sudo hcitool -i "$hci" cmd 0x03 0x001b 2>/dev/null | sed -n '3p')
+  psi=$(( 16#$(printf '%s' "$act" | awk '{print $6 $5}' 2>/dev/null || echo 0) ))
+  psw=$(( 16#$(printf '%s' "$act" | awk '{print $8 $7}' 2>/dev/null || echo 0) ))
+  pst=$(sudo hcitool -i "$hci" cmd 0x03 0x0046 2>/dev/null | sed -n '3p' | awk '{print $5}')
+  case "$uuids" in *$UUID_A2DP_SOURCE*) yes_a2dp=yes ;; *) yes_a2dp=no ;; esac
+  case "$uuids" in *$UUID_AVRCP_TARGET*) yes_avrcp=yes ;; *) yes_avrcp=no ;; esac
+  log "TESLA-BT READY t=$(mono)s adapter=$hci bdaddr=$ADAPTER powered=$(bluez_prop "/org/bluez/$hci" org.bluez.Adapter1 Powered) connectable=$(bluez_prop "/org/bluez/$hci" org.bluez.Adapter1 Connectable) discoverable=$(bluez_prop "/org/bluez/$hci" org.bluez.Adapter1 Discoverable) class=$(printf '0x%06x' "$(bluez_prop "/org/bluez/$hci" org.bluez.Adapter1 Class)" 2>/dev/null) tesla_paired=$(bluez_prop "$dev" org.bluez.Device1 Paired) tesla_trusted=$(bluez_prop "$dev" org.bluez.Device1 Trusted) link_key=$(sudo test -s "/var/lib/bluetooth/$ADAPTER/$MAC/info" && echo yes || echo no) a2dp_source=$yes_a2dp avrcp=$yes_avrcp page_scan_interval=${psi}slots/$((psi * 625 / 1000))ms page_scan_window=${psw}slots/$((psw * 625 / 1000))ms page_scan_type=${pst:-?} mode=$MODE"
+}
+
 # ── preflight ─────────────────────────────────────────────────────────
 
 log "starting — target $MAC via adapter $ADAPTER"
@@ -381,21 +664,31 @@ else
   warn "bluez $(bluetoothctl --version 2>/dev/null | awk '{print $NF}'), dbus-monitor MISSING — falling back to polling"
 fi
 
-hci=$(adapter_hci)
+hci=$(wait_for_adapter)
 if [ -n "$hci" ]; then
   log "Adapter ready — $ADAPTER is $hci"
-  ensure_powered "$hci" || err "adapter $hci would not power on"
-  # Before the first connect, not after it: this is the whole point of the
-  # rewrite. See the boot-race note at the top.
-  wait_for_audio_stack "$hci"
+  # Order matters, and this is the order. Nothing becomes reachable until
+  # everything the car will ask for exists.
+  gate_until_ready "$hci"
   if [ -n "$(bluez_prop "/org/bluez/$hci/dev_$MAC_PATH" org.bluez.Device1 Paired)" ]; then
     log "Known Tesla device found — $MAC on $hci"
   else
     err "no bond for $MAC on $ADAPTER — pair from the car's screen first"
   fi
+  ensure_connectable "$hci"
   check_bond "/org/bluez/$hci/dev_$MAC_PATH"
+  ready_report "$hci"
 else
   err "adapter $ADAPTER is not present — waiting for it to appear"
+fi
+
+if [ "$MODE" = "listen" ]; then
+  log "mode: LISTEN — the Pi will not page the car. This car refuses every"
+  log "mode: LISTEN — inbound link we open, and paging it deafens our own"
+  log "mode: LISTEN — radio to its attempts. Measured: connects in ~3s of quiet."
+else
+  warn "mode: INITIATE — paging the car on a backoff. On the Tesla this is the"
+  warn "mode: INITIATE — behaviour that BROKE auto-connect; see the file header."
 fi
 
 # ── main loop ─────────────────────────────────────────────────────────
@@ -405,6 +698,7 @@ last_reason=""
 last_summary=0
 was_connected=-1
 disconnected_at=0
+last_idle_report=0
 
 while true; do
   hci=$(adapter_hci)
@@ -420,13 +714,14 @@ while true; do
     sleep 10
     continue
   fi
+  ensure_connectable "$hci"
 
   if is_connected "$dev"; then
     if [ "$was_connected" != "1" ]; then
       if [ "$fail_streak" -gt 0 ]; then
         log "Tesla connected via $hci after $fail_streak failed attempt(s)"
       else
-        log "Tesla already connected via $hci"
+        log "Tesla connected via $hci"
       fi
       check_bond "$dev"
       sleep 3          # give WirePlumber time to build the nodes
@@ -437,12 +732,46 @@ while true; do
     fi
     wait_for_bluez_event 60
     if ! is_connected "$dev"; then
-      warn "Tesla disconnected — will reconnect after ${DISCONNECT_GRACE_SEC}s"
       was_connected=0
       disconnected_at=$(date +%s)
+      if [ "$MODE" = "listen" ]; then
+        # Deliberately not chased. See the file header: reaching for the
+        # car here is what stopped it reaching for us.
+        warn "Tesla disconnected — waiting for it to reconnect (not paging it)"
+      else
+        warn "Tesla disconnected — will reconnect after ${DISCONNECT_GRACE_SEC}s"
+      fi
     fi
     continue
   fi
+
+  # ── not connected ───────────────────────────────────────────────────
+
+  was_connected=0
+
+  # The audio stack can go away mid-run (a WirePlumber restart), and an
+  # inbound connection that lands while it is missing fails on profile
+  # and costs the car one of its few attempts. Worth noticing in both
+  # modes, and worth waiting for before doing anything else.
+  if ! audio_stack_ready "$hci"; then
+    warn "A2DP endpoint has gone from $hci — the car cannot complete a link until it returns"
+    wait_for_audio_stack "$hci"
+    continue
+  fi
+
+  if [ "$MODE" = "listen" ]; then
+    # Nothing to do but be reachable. Everything that matters — powered,
+    # page-scanning, trusted, A2DP registered — has been checked above.
+    now=$(date +%s)
+    if [ $((now - last_idle_report)) -ge "$IDLE_REPORT_SEC" ]; then
+      log "Ready and connectable on $hci — waiting for the Tesla to connect"
+      last_idle_report=$now
+    fi
+    wait_for_bluez_event 60
+    continue
+  fi
+
+  # ── initiate mode only, from here down ──────────────────────────────
 
   # Someone asked us to stay out of the way (another device in use, or a
   # deliberate disconnect they want to stick).
@@ -461,15 +790,6 @@ while true; do
     continue
   fi
 
-  # The audio stack can go away mid-run (a WirePlumber restart), and
-  # connecting without it produces the same false "CAR" verdict as at boot.
-  if ! audio_stack_ready "$hci"; then
-    warn "A2DP endpoint has gone from $hci — waiting for the audio stack before retrying"
-    wait_for_audio_stack "$hci"
-    continue
-  fi
-
-  was_connected=0
   fail_streak=$((fail_streak + 1))
   log "Reconnect attempt $fail_streak"
   if attempt_connect "$dev"; then

@@ -650,11 +650,40 @@ What's real:
   `mpris-proxy`.
 
 - **Tesla auto-connect** (`scripts/tesla-bt-connect.sh`, installed by
-  `scripts/tesla-bt-setup.sh`) — a root service that keeps the A2DP link up and records
-  *why* it failed when it doesn't. It waits for the adapter to advertise A2DP Source and
-  AVRCP Target before its first connect, because PipeWire registers those endpoints one
-  to three seconds after `bluetoothd` starts and connecting into that gap fails with
-  `Protocol not available` while taking the car's own reconnect window down with it.
+  `scripts/tesla-bt-setup.sh`) — a root service whose job is **not** to connect. It makes
+  sure the Pi is always ready to *accept* the car, and otherwise says nothing.
+
+  That inversion is the fix. Measured at HCI level with the car awake, every Pi-initiated
+  link is rejected `Connection Rejected due to Unacceptable BD_ADDR (0x0f)` — the Tesla
+  will only accept a connection it starts — and worse, a controller that is paging is not
+  page-*scanning*, so our own retrying was deafening the radio to the car's attempts. On
+  one drive: paging continuously → never connected; paging then backing off → connected
+  60s after the last page; never paging at all → connected in 3 seconds. `bluetoothd`'s
+  own `[Policy] ReconnectAttempts` is set to 0 for the same reason. Verified: **0 HCI
+  commands sent in 90s** while disconnected.
+
+  It also brings the Pi up in a deliberate order, because being reachable too early is
+  its own bug. `bluetoothd` is ready at 5.4s but PipeWire does not register the A2DP
+  endpoints until ~8s, and a car that pages in between completes an ACL and then fails
+  AVDTP with `Protocol not available` — spending one of the few attempts Tesla makes
+  before giving up for good. So `[Policy] AutoEnable=false` keeps the radio powered off
+  and the service turns it on only once A2DP Source and AVRCP Target actually exist:
+
+  ```
+  controller → bluetoothd → PipeWire/WirePlumber → A2DP + AVRCP confirmed
+  → only now connectable → Tesla connects → audio works immediately
+  ```
+
+  The Pi becomes reachable a fraction of a second later, and every page it answers is one
+  it can finish: a page timeout reads as "not here yet" and gets retried, a failed profile
+  connect reads as "here and broken". Gating is cold-start only — the unit is
+  `Restart=always`, and re-running it mid-drive would power the radio down on a live link.
+  If the audio stack never arrives it powers on anyway after 45s, because Bluetooth with
+  no sound beats no Bluetooth.
+
+  `TESLA-BT READY t=…` is logged once per boot with every value the car cares about —
+  powered, connectable, class, pairing, trust, link key, both profiles, and the real
+  page-scan parameters read from the controller — so a failed drive is one `grep`.
 - **Offline replay** — the stream server has always written played tracks to
   `<app-cache>/stream/<videoId>.webm` and served later plays from disk; lyrics now
   cache the same way (`lyricsStore`, whole per-source map, 300-track cap), so

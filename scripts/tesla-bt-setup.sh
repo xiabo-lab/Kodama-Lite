@@ -21,12 +21,19 @@
 #       interval so the Pi answers promptly. The documented tradeoff is
 #       power, which is irrelevant on a car-powered appliance.
 #
-#     [Policy] ReconnectAttempts / ReconnectIntervals
-#       BlueZ's own policy plugin already reconnects A2DP after a link
-#       loss (ReconnectUUIDs defaults include 110a/110b), but the attempt
-#       count and schedule are only defaults until they are written down.
-#       Making them explicit means a mid-drive drop is chased by BlueZ on
-#       a sane ramp as well as by tesla-bt-connect.
+#     [Policy] ReconnectAttempts = 0
+#       BlueZ's policy plugin pages a device after a link loss. On this
+#       Tesla that is pure harm and it was measured doing harm: every page
+#       the Pi sends is rejected `Connection Rejected due to Unacceptable
+#       BD_ADDR (0x0f)` — the car never accepts an inbound link — and
+#       while the controller is paging it is not page-SCANNING, so it is
+#       deaf to the car's own attempts for the duration. A capture during
+#       a 2-minute reconnect test showed 4 outgoing pages from this plugin
+#       alone, with the script already silent. Zero means the radio spends
+#       its whole time listening, which is the only thing that works here.
+#
+#       Set it back to 7 (with ReconnectIntervals) for a head unit that
+#       actually accepts inbound connections.
 #
 #   /usr/local/bin/tesla-bt-connect.sh + its unit
 #     The connect loop itself. See the long comment at the top of that
@@ -35,6 +42,8 @@
 # Everything here is reversible:
 #   sudo cp /etc/bluetooth/main.conf.kodama-bak /etc/bluetooth/main.conf
 #   sudo systemctl restart bluetooth
+#   sudo rm /etc/cloud/cloud-init.disabled
+#   sudo loginctl disable-linger fuwenxu
 
 set -euo pipefail
 
@@ -46,6 +55,8 @@ fi
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONF=/etc/bluetooth/main.conf
 BAK=/etc/bluetooth/main.conf.kodama-bak
+# The desktop user whose session runs PipeWire/WirePlumber.
+BT_USER="${TESLA_PW_USER:-fuwenxu}"
 
 say() { printf '[tesla-bt-setup] %s\n' "$*"; }
 
@@ -97,9 +108,113 @@ PY
 }
 
 set_ini General FastConnectable true "$CONF"
-set_ini Policy  AutoEnable true "$CONF"
-set_ini Policy  ReconnectAttempts 7 "$CONF"
-set_ini Policy  ReconnectIntervals "1,2,4,8,16,32,64" "$CONF"
+# AutoEnable=FALSE, deliberately. With it true, bluetoothd powers the
+# adapter on the moment it starts (5.45s) — but the A2DP endpoints do not
+# exist until ~8s, so anything that pages in between completes an ACL and
+# then fails AVDTP with `Protocol not available`, burning one of Tesla's
+# ~5 attempts. tesla-bt-connect powers the radio on itself, once A2DP
+# Source and AVRCP Target are actually registered.
+#
+# The service is Restart=always and powers the radio on regardless after
+# TESLA_GATE_MAX_WAIT_SEC, so a broken audio stack degrades to "Bluetooth
+# with no sound" rather than "no Bluetooth". If you ever remove that
+# service, set this back to true or the adapter will stay dark.
+set_ini Policy  AutoEnable false "$CONF"
+set_ini Policy  ReconnectAttempts 0 "$CONF"
+# Class of Device. The adapter was advertising 0x4c0000, whose major device
+# class field is 0 — "Miscellaneous". Tesla is a car kit that connects to
+# phones and media devices; announcing ourselves as an unclassified nothing
+# is at best unhelpful.
+#
+# 0x00041C is Audio/Video (major 0x04) : Portable Audio (minor 0x07), which
+# is what this device honestly is — an A2DP Source with AVRCP. Not an
+# iPhone impersonation; the standards-compliant class for what it does.
+# BlueZ takes only the major/minor bits from here, deriving the service
+# class bits from the profiles actually registered.
+set_ini General Class 0x00041C "$CONF"
+
+# ── 1b. get Bluetooth up EARLY ────────────────────────────────────────
+#
+# The whole problem is a race: Tesla pages its priority device when the car
+# wakes, gives up after ~5 tries, and never retries. The Pi only gets power
+# when the ignition does, so every second before the radio is listening is
+# a second of that window thrown away. Two things were holding it back.
+
+# cloud-init sits on bluetooth.service's critical path:
+#   cloud-init-main +758ms -> cloud-init-local +159ms -> cloud-init-network
+#   -> sysinit.target @2.879s -> basic.target -> bluetooth.service
+# This is a fixed-image car appliance; cloud-init has nothing to do here.
+# The documented disable switch, not a purge, so it is trivially undone.
+if [ -d /etc/cloud ] && [ ! -f /etc/cloud/cloud-init.disabled ]; then
+  touch /etc/cloud/cloud-init.disabled
+  say "disabled cloud-init (was ~1.5s on bluetooth.service critical path)"
+fi
+
+# The A2DP endpoints come from WirePlumber, which lives in the user session
+# - and without linger, user@1000 does not start until lightdm has logged
+# in: measured at 6.92s, with the endpoints landing at 8.14s. Lingering
+# starts the user manager at boot instead, so PipeWire/WirePlumber no
+# longer wait for the graphical stack. Bluetooth must not depend on the UI.
+if [ "$(loginctl show-user "$BT_USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
+  loginctl enable-linger "$BT_USER"
+  say "enabled linger for $BT_USER (audio stack no longer waits for the desktop)"
+fi
+
+# Linger alone bought nothing, because the user manager has a second gate:
+#
+#   user@1000.service <- systemd-user-sessions.service <- network.target
+#                     <- NetworkManager.service (+1.118s)
+#
+# So the A2DP endpoints were waiting on NetworkManager, which audio does not
+# need in any way. `systemd-user-sessions` exists to remove /run/nologin and
+# gate interactive logins; a lingering user manager has no business waiting
+# for it. Drop that one edge and keep every other ordering intact.
+#
+# Written as a full re-declaration because `After=` is additive — the empty
+# assignment first is what clears the inherited list.
+DROPIN=/etc/systemd/system/user@$(id -u "$BT_USER").service.d
+mkdir -p "$DROPIN"
+cat > "$DROPIN/10-kodama-early-audio.conf" <<'UNIT'
+# Start the user manager (and with it PipeWire/WirePlumber, and with them
+# the Bluetooth A2DP endpoints) without waiting for the network.
+#
+# Measured on this Pi: user@1000 at 7.23s -> the A2DP endpoints at 8.16s,
+# with the radio itself usable at 5.45s. Every one of those seconds is a
+# second of Tesla's connect window spent unable to complete a link.
+#
+# Revert: rm this file, systemctl daemon-reload.
+[Unit]
+After=
+After=systemd-logind.service dbus.service user-runtime-dir@%i.service
+After=systemd-journald.socket sysinit.target basic.target user-%i.slice
+UNIT
+say "user@$(id -u "$BT_USER") no longer waits for network.target"
+
+# That alone changes nothing, because the edge is owned by the OTHER unit:
+# systemd-user-sessions.service declares Before=user@1000.service, and a
+# drop-in on user@1000 cannot remove a dependency someone else declares.
+#
+# systemd-user-sessions itself waits for network.target purely so that
+# network-backed name lookups (NIS/LDAP) resolve before logins are allowed.
+# This Pi has one local account and no directory service, so that ordering
+# costs 1.1s of NetworkManager startup and buys nothing.
+#
+# Revert: rm this file, systemctl daemon-reload.
+SUS=/etc/systemd/system/systemd-user-sessions.service.d
+mkdir -p "$SUS"
+cat > "$SUS/10-kodama-no-network-wait.conf" <<'UNIT'
+# Permit user sessions without waiting for the network.
+#
+# The only account on this machine is local, so nothing here needs a
+# network name lookup. Dropping the edge lets the user manager — and with
+# it PipeWire, WirePlumber and the Bluetooth A2DP endpoints — start about
+# 1.1s earlier, which is 1.1s less of Tesla's connect window spent with a
+# radio that answers pages it cannot yet service.
+[Unit]
+After=
+After=remote-fs.target nss-user-lookup.target home.mount
+UNIT
+say "systemd-user-sessions no longer waits for network.target"
 
 # ── 2. the connect loop ───────────────────────────────────────────────
 
