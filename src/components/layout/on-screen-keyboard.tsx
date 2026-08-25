@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowBigUpIcon,
   ChevronLeftIcon,
@@ -103,6 +103,7 @@ export function OnScreenKeyboard({
   submitLabel = "Search",
   caret,
   showSubmitKey = true,
+  resetSignal,
 }: {
   value: string;
   /** React-style updater, NOT a plain value. The keyboard must never
@@ -149,6 +150,20 @@ export function OnScreenKeyboard({
    * keyboard's copy was the one more easily hit by accident mid-typing.
    */
   showSubmitKey?: boolean;
+  /**
+   * Bump this to make the keyboard drop any un-converted Pinyin.
+   *
+   * The caller owns the text and the caret and can clear those itself. The
+   * composing buffer is the one piece of editing state that lives in here,
+   * so a Clear button *outside* the keyboard — which is where it has to be
+   * in `embedded` mode, since the preview row holding this component's own
+   * Clear key isn't rendered then — has no way to reach it. Without this,
+   * clearing a field left its half-typed underlined Pinyin sitting in the
+   * field, which reads as Clear not having worked.
+   *
+   * A counter rather than a boolean, so two clears in a row both land.
+   */
+  resetSignal?: number;
 }) {
   const [shift, setShift] = useState(false);
   const [symbols, setSymbols] = useState(false);
@@ -193,6 +208,17 @@ export function OnScreenKeyboard({
   const shownPage = Math.min(page, pageCount - 1);
   const pageStart = shownPage * CANDIDATES_PER_PAGE;
   const pageCandidates = candidates.slice(pageStart, pageStart + CANDIDATES_PER_PAGE);
+
+  // Compared against a ref rather than acted on for every render of
+  // `resetSignal`: only an actual change counts, so mounting with a
+  // seeded field never wipes anything.
+  const lastResetRef = useRef(resetSignal);
+  useEffect(() => {
+    if (resetSignal === lastResetRef.current) return;
+    lastResetRef.current = resetSignal;
+    setComposing("");
+    setPage(0);
+  }, [resetSignal]);
 
   /**
    * Insert `text` at the caret (or at the end when there is no caret) and

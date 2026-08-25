@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
+  EraserIcon,
   ListIcon,
   Loader2Icon,
   SearchIcon,
@@ -81,6 +82,38 @@ export function LyricsSearchView({ onClose }: { onClose: () => void }) {
     setComposing("");
     if (field === "artist") setArtistCaret(pos);
     else setTitleCaret(pos);
+  };
+
+  /**
+   * Bumped to tell the keyboard to drop any half-typed Pinyin.
+   *
+   * The text and the caret are ours to clear; the composing buffer lives
+   * inside `OnScreenKeyboard`. Without this, Clear would empty the field
+   * and leave the underlined un-converted letters sitting in it, which
+   * looks like the button not having worked.
+   */
+  const [keyboardReset, setKeyboardReset] = useState(0);
+
+  /**
+   * Empty whichever field is currently selected — and only that one.
+   *
+   * Deliberately not a "clear both": the two fields fail independently.
+   * The usual reason to be on this screen at all is that ONE of them is
+   * wrong (a channel name glued to the title, a romanised artist), and the
+   * other is the part worth keeping. Wiping both would turn a one-field
+   * correction into retyping a Chinese song title on a touch keyboard,
+   * which is the exact cost this screen exists to avoid.
+   */
+  const clearActive = () => {
+    if (active === "artist") {
+      setArtist("");
+      setArtistCaret(0);
+    } else {
+      setTitle("");
+      setTitleCaret(0);
+    }
+    setComposing("");
+    setKeyboardReset((n) => n + 1);
   };
 
   // Closing no longer discards the results — that is what makes reopening
@@ -205,6 +238,24 @@ export function LyricsSearchView({ onClose }: { onClose: () => void }) {
             </>
           )}
         </button>
+
+        {/* Named for the field it acts on, not just "Clear". Which of the
+            two is selected is shown by a border colour, and a border
+            colour is not enough to bet a retyped title on at a glance in
+            a moving car — the label says what is about to be emptied.
+
+            Secondary weight and shorter than Search: this is the
+            destructive one of the pair, and it sits directly under the
+            button people mean to hit. */}
+        <button
+          type="button"
+          onClick={clearActive}
+          disabled={!activeValue && !composing}
+          className="flex h-14 shrink-0 items-center justify-center gap-3 rounded-xl bg-white/10 text-lg font-medium transition-colors hover:bg-white/15 active:bg-white/25 disabled:opacity-30"
+        >
+          <EraserIcon className="size-6" />
+          Clear {active === "artist" ? "Artist" : "Song"}
+        </button>
       </div>
 
       <div className="min-w-0 flex-1">
@@ -218,6 +269,7 @@ export function LyricsSearchView({ onClose }: { onClose: () => void }) {
           onSubmit={runSearch}
           onClose={close}
           caret={{ pos: caretPos, set: setCaretPos }}
+          resetSignal={keyboardReset}
           // The left column already has a large Search button directly
           // under the fields it acts on; a second one in the keyboard's
           // corner was the same action twice, and the easier of the two to
