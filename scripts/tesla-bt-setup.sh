@@ -39,8 +39,15 @@
 #     The connect loop itself. See the long comment at the top of that
 #     script for the boot race it exists to close.
 #
+#   ~<user>/.config/wireplumber/wireplumber.conf.d/52-no-bt-autoconnect.conf
+#     bluez5.auto-connect = [ ]
+#       WirePlumber pages the car on every start, behind both silencers
+#       above, and it has to be a *rule* rather than a monitor property to
+#       take effect. See section 1c for the capture that found it.
+#
 # Everything here is reversible:
 #   sudo cp /etc/bluetooth/main.conf.kodama-bak /etc/bluetooth/main.conf
+#   rm ~/.config/wireplumber/wireplumber.conf.d/52-no-bt-autoconnect.conf
 #   sudo systemctl restart bluetooth
 #   sudo rm /etc/cloud/cloud-init.disabled
 #   sudo loginctl disable-linger fuwenxu
@@ -215,6 +222,84 @@ After=
 After=remote-fs.target nss-user-lookup.target home.mount
 UNIT
 say "systemd-user-sessions no longer waits for network.target"
+
+# ── 1c. stop WirePlumber paging the car ───────────────────────────────
+#
+# Two silencers were already in place — this script's listen mode and
+# [Policy] ReconnectAttempts=0 above — and the Pi was STILL paging the
+# Tesla on every single boot. Caught 2026-08-25 with `dbus-monitor
+# --system` on interface=org.bluez.Device1: about two seconds after every
+# WirePlumber start it calls
+#
+#   org.bluez.Device1.ConnectProfile("0000110b-...")   <- A2DP AudioSink
+#
+# on the car. In the journal that surfaces as
+#
+#   avdtp_connect_cb() connect to 4C:FC:AA:55:B0:60: Connection refused (111)
+#
+# with the car present, and "Host is down (112)" with the car absent. The
+# 112 is the tell: a page timeout can only happen if we paged, so an absent
+# car proves the Pi initiated rather than merely answered.
+#
+# It matters for the same reason as everything else here: a controller that
+# is PAGING is not page-SCANNING, so each attempt is a window in which the
+# car's own attempt goes unheard — and the car tries about five times, then
+# gives up until it next wakes.
+#
+# The knob is `bluez5.auto-connect`, and the trap is that it is a property
+# of the DEVICE (api.bluez5.device, read in bluez5-device.c), NOT of the
+# monitor. Setting it under `monitor.bluez.properties` does nothing, and
+# does nothing SILENTLY. That the section is read at all was confirmed by
+# setting `bluez5.codecs` there, which really did cut the codec list from
+# 19 to 1 — so an ineffective key there looks exactly like a working one.
+# It has to be a rule, because scripts/monitors/bluez.lua runs
+# `match_rules_update_properties(config.rules)` over the properties it
+# hands to SpaDevice(). Note that same script creates the device for a
+# DISCONNECTED car too (it creates it, then deactivates it), which is
+# exactly why a car thirty miles away still got paged.
+#
+# Revert: rm this file, then, as the user,
+#   systemctl --user restart wireplumber
+PW_DIR="$(getent passwd "$BT_USER" | cut -d: -f6)/.config/wireplumber/wireplumber.conf.d"
+install -d -o "$BT_USER" -g "$BT_USER" "$PW_DIR"
+cat > "$PW_DIR/52-no-bt-autoconnect.conf" <<'PWCONF'
+# Never let WirePlumber initiate a Bluetooth connection.
+#
+# This car refuses every Pi-initiated link at HCI level (Connect Complete ->
+# "Connection Rejected due to Unacceptable BD_ADDR (0x0f)"), and paging it
+# deafens our own radio to the car's own attempts. The Pi's job is to sit
+# still and answer.
+#
+# Installed by scripts/tesla-bt-setup.sh — the long comment is there.
+monitor.bluez.rules = [
+  {
+    matches = [
+      { device.name = "~bluez_card.*" }
+    ]
+    actions = {
+      update-props = {
+        bluez5.auto-connect = [ ]
+      }
+    }
+  }
+]
+PWCONF
+chown "$BT_USER:$BT_USER" "$PW_DIR/52-no-bt-autoconnect.conf"
+say "installed $PW_DIR/52-no-bt-autoconnect.conf (WirePlumber no longer pages the car)"
+
+# The adapter must not sit in inquiry scan either. An earlier debugging
+# session set Discoverable=true with DiscoverableTimeout=0 while testing
+# whether the car would ever come looking for an absent device (it does
+# not, at all), and that persisted in the adapter's BlueZ settings across
+# every reboot since. Inquiry scan interleaves with the page scan we
+# actually depend on, and buys nothing for a device that is already bonded.
+for s in /var/lib/bluetooth/*/settings; do
+  [ -f "$s" ] || continue
+  if grep -q '^Discoverable=true$' "$s"; then
+    sed -i 's/^Discoverable=true$/Discoverable=false/' "$s"
+    say "cleared leftover Discoverable=true in $s"
+  fi
+done
 
 # ── 2. the connect loop ───────────────────────────────────────────────
 
