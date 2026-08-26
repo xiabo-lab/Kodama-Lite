@@ -23,6 +23,15 @@ export type Command =
   | { type: "stream:resolve"; videoId: string }
   /** Warm the disk cache for a track without playing it. */
   | { type: "stream:prefetch"; videoId: string }
+  /** Where is cover art served from? Answered with `cover:base`.
+   *
+   *  A request rather than something the data plane volunteers at boot:
+   *  an event emitted before the transport's `listen()` round trip
+   *  completes reaches nobody, and the symptom of losing this one would be
+   *  artwork that silently never caches — invisible until the next cold
+   *  boot in a car park with no signal. Fired once on mount, alongside
+   *  `connectivity:check` and `auth:check`. */
+  | { type: "cover:base" }
   /** Re-report the managed yt-dlp binary's phase. The data plane emits
    *  `ytdlp:state` once from its setup hook, which runs before the webview
    *  exists — so without asking again on mount the UI's `ytdlpPhase` stays
@@ -100,6 +109,11 @@ export type AppEvent =
   | { type: "net:status"; online: boolean }
   /** A videoId is now playable at `url` (the local stream server). */
   | { type: "stream:ready"; videoId: string; url: string }
+  /** Where to fetch cover art: the local server's `/cover` endpoint, with
+   *  the per-launch token already in it. Append `?u=<encoded artwork URL>`.
+   *  See `subsystems/covers.rs` for why artwork does not go straight to
+   *  the CDN. */
+  | { type: "cover:base"; url: string }
   | {
       type: "stream:error";
       videoId: string;

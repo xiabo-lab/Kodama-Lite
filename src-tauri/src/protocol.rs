@@ -33,6 +33,15 @@ pub enum Command {
         #[serde(rename = "videoId")]
         video_id: String,
     },
+    /// Ask where cover art is served from, so the view plane can rewrite
+    /// artwork URLs through the local disk cache. Answered with
+    /// `cover:base`. A request rather than a boot-time emit because the
+    /// answer has to survive the listener-registration race — an event
+    /// emitted before `listen()` completes reaches nobody, and a Home
+    /// screen whose artwork silently never caches is exactly the kind of
+    /// quiet failure this app has been bitten by before.
+    #[serde(rename = "cover:base")]
+    CoverBase,
     /// Re-report the managed yt-dlp binary's phase — see the TS mirror for
     /// why the boot-time emit alone is not enough.
     #[serde(rename = "ytdlp:check")]
@@ -110,6 +119,10 @@ pub enum AppEvent {
     Pong { ts: i64 },
     #[serde(rename = "net:status")]
     NetStatus { online: bool },
+    /// Where to fetch cover art: the local server's `/cover` endpoint,
+    /// already carrying the per-launch token. Answers `cover:base`.
+    #[serde(rename = "cover:base")]
+    CoverBase { url: String },
     /// A videoId is now playable at `url` (the local stream server).
     #[serde(rename = "stream:ready")]
     StreamReady {

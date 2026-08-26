@@ -51,6 +51,23 @@ export interface AppState {
    *  asked yet". Anything that must wait for a *confirmed* connection
    *  (resume-on-startup) checks this too. */
   netChecked: boolean;
+  /** Where cover art is fetched from — the local server's `/cover`
+   *  endpoint, which caches to disk. Undefined until `cover:base` answers,
+   *  and `Thumbnail` falls back to the CDN directly in the meantime, so a
+   *  data plane that never answers costs the cache and not the artwork. */
+  coverBase?: string;
+  /** Bumped every time connectivity is regained.
+   *
+   *  `Thumbnail` remembers which image URL failed so it doesn't retry a
+   *  dead request on every render — but the URL never changes, and the
+   *  carousel keys items by `kind:id`, so React keeps the same component
+   *  instance across a feed refresh and the remembered failure with it.
+   *  A tile that missed the boot window therefore stayed a grey glyph for
+   *  the rest of the session, on a screen that had long since come back
+   *  online. Including this counter in that memory is what expires it:
+   *  the network coming back is the one event that makes a previous
+   *  failure worth re-testing. */
+  netEpoch: number;
   /** Sidebar rail state: `true` renders the icon-only rail. Toggled by the
    *  title bar's panel button. */
   sidebarCollapsed: boolean;
@@ -73,6 +90,7 @@ export interface AppState {
 export const useAppStore = create<AppState>((set, get) => ({
   online: true,
   netChecked: false,
+  netEpoch: 0,
   history: [{ kind: "home" }],
   index: 0,
   route: { kind: "home" },
@@ -121,7 +139,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   applyEvents: (events) => {
     for (const e of events) {
       if (e.type === "net:status") {
-        set({ online: e.online, netChecked: true });
+        // Only the offline→online edge bumps the epoch. Bumping on every
+        // probe would re-attempt every failed image every 20 seconds for
+        // the whole of an outage, which is the opposite of what the
+        // memory is for.
+        const regained = e.online && !get().online;
+        set((s) => ({
+          online: e.online,
+          netChecked: true,
+          netEpoch: regained ? s.netEpoch + 1 : s.netEpoch,
+        }));
+      } else if (e.type === "cover:base") {
+        set({ coverBase: e.url });
       }
     }
   },

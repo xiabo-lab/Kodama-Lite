@@ -3,6 +3,8 @@ import { ListMusicIcon, PauseIcon, PlayIcon, Trash2Icon, Volume2Icon, XIcon } fr
 import { usePlaybackStore, type Track } from "@/store/playbackStore";
 import { useQueuePanelStore } from "@/store/queuePanelStore";
 import { cn } from "@/lib/utils";
+import { coverSrc } from "@/components/shared/thumbnail";
+import { useAppStore } from "@/store/appStore";
 
 function formatDuration(seconds?: number): string {
   if (!seconds || Number.isNaN(seconds)) return "—";
@@ -173,6 +175,7 @@ function QueueRow({
   onActivate: () => void;
   onRemove?: () => void;
 }) {
+  const coverBase = useAppStore((s) => s.coverBase);
   const overlayIcon = active && playing ? <PauseIcon className="size-4 fill-current" /> : <PlayIcon className="size-4 fill-current" />;
 
   return (
@@ -192,7 +195,10 @@ function QueueRow({
       )}
     >
       <div className="relative size-10 shrink-0 overflow-hidden rounded-md bg-muted">
-        {track.thumbnail ? <img src={track.thumbnail} alt={track.title} className="size-full object-cover" referrerPolicy="no-referrer" /> : null}
+        {/* Through the local disk cache, like every `Thumbnail` — the
+            queue is restored from localStorage on a cold boot too, so
+            without this its rows are blank until the network arrives. */}
+        {track.thumbnail ? <img src={coverSrc(track.thumbnail, coverBase)} alt={track.title} className="size-full object-cover" referrerPolicy="no-referrer" /> : null}
         <span className={cn("absolute inset-0 flex items-center justify-center bg-black/50 text-white", active ? "opacity-100" : "opacity-0 group-hover:opacity-100")}>
           {active && playing ? (
             <>

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useAppStore } from "@/store/appStore";
 import {
   BookmarkIcon,
   DiscIcon,
@@ -12,11 +13,9 @@ import { cn } from "@/lib/utils";
 import type { ShelfItem, Thumbnail as YtThumbnail } from "@/lib/innertube/types";
 
 /**
- * Simplified from YTMLite's `Thumbnail` — no disk-cache hi-res upgrade
- * (that lived behind a Rust cover-cache subsystem this phase doesn't have
- * time to port). Just picks the best-fit API-shipped variant and renders a
- * plain lazy `<img>`; still cache-first in the sense that it never blocks
- * paint on anything beyond the image's own load.
+ * Picks the best-fit API-shipped variant. The URL this returns is the
+ * *upstream* one; `Thumbnail` rewrites it through the local disk cache
+ * before it reaches an `<img>` — see `coverSrc` below.
  */
 export function pickThumbnail(thumbnails: YtThumbnail[], targetSize = 256): string | null {
   if (!thumbnails.length) return null;
@@ -99,6 +98,27 @@ type Props = {
   title?: string;
 };
 
+/**
+ * Rewrite an upstream artwork URL through the local cover cache.
+ *
+ * This is what makes a cold boot look right. The Pi's network takes about
+ * forty seconds to arrive, `homeStore` restores the last feed from
+ * localStorage and paints it on the first frame, and pointing those
+ * `<img>`s straight at `i.ytimg.com` meant every tile failed and fell back
+ * to a grey glyph for the first minute of every drive. The local server
+ * answers the same request from disk, with no network involved at all —
+ * see `subsystems/covers.rs`.
+ *
+ * `base` is undefined until `cover:base` answers, which is a few
+ * milliseconds into the launch. Falling back to the upstream URL for that
+ * window means a data plane that never answers costs the *cache*, never
+ * the artwork.
+ */
+export function coverSrc(url: string, base: string | undefined): string {
+  if (!base) return url;
+  return `${base}?u=${encodeURIComponent(url)}`;
+}
+
 export function Thumbnail({
   thumbnails,
   alt,
@@ -109,7 +129,10 @@ export function Thumbnail({
   id,
   title,
 }: Props) {
+  const coverBase = useAppStore((s) => s.coverBase);
+  const netEpoch = useAppStore((s) => s.netEpoch);
   const picked = pickThumbnail(thumbnails, targetSize);
+  const resolved = picked ? coverSrc(picked, coverBase) : null;
 
   // Fall back when the image FAILS TO LOAD, not merely when the API
   // shipped no URL. That distinction was the bug: YouTube Music does ship
@@ -118,10 +141,18 @@ export function Thumbnail({
   // tile stayed empty — the icon fallback never got a chance. Seeded test
   // data with an empty array hid it completely.
   //
-  // Keyed by URL so a new track's image gets a fresh attempt rather than
-  // inheriting the previous one's failure.
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const src = picked && picked !== failedSrc ? picked : null;
+  // Remembered against the RESOLVED url and the connectivity epoch, not
+  // the upstream url alone. Two things depend on that pair:
+  //
+  //   * `cover:base` arriving changes the resolved url, so the one attempt
+  //     made before the cache was known does not condemn the tile.
+  //   * The epoch expires a failure when the network returns. Without it a
+  //     tile that failed during the boot window stayed grey for the whole
+  //     session — the carousel keys items by `kind:id`, so the component
+  //     instance and its memory survive every feed refresh.
+  const [failed, setFailed] = useState<{ src: string; epoch: number } | null>(null);
+  const stillFailed = failed?.src === resolved && failed.epoch === netEpoch;
+  const src = resolved && !stillFailed ? resolved : null;
 
   const auto = src ? null : autoArtFor(id, title ?? alt);
   const Icon = auto?.icon ?? iconFor(kind);
@@ -145,7 +176,7 @@ export function Thumbnail({
           loading="lazy"
           decoding="async"
           referrerPolicy="no-referrer"
-          onError={() => setFailedSrc(picked)}
+          onError={() => setFailed({ src, epoch: netEpoch })}
           className="size-full object-cover"
         />
       ) : (

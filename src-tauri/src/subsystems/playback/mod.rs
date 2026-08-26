@@ -45,15 +45,25 @@ pub(crate) fn sanitize_video_id(id: &str) -> bool {
 /// Boot the subsystem: ensure yt-dlp is available and start the local
 /// streaming server. Called once from `run()`'s setup hook.
 pub fn start(app: &AppHandle) {
-    let cache_dir = app
+    let app_cache = app
         .path()
         .app_cache_dir()
-        .unwrap_or_else(|_| std::env::temp_dir())
-        .join("stream");
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let cache_dir = app_cache.join("stream");
+    let covers_dir = crate::subsystems::covers::dir(&app_cache);
     let ytdlp_bin = ytdlp::managed_path(app);
 
+    // Trim the cover cache once per launch, off the request path — see the
+    // note on `covers::prune`.
+    {
+        let covers_dir = covers_dir.clone();
+        tauri::async_runtime::spawn(async move {
+            crate::subsystems::covers::prune(&covers_dir).await;
+        });
+    }
+
     let (tx, rx) = watch::channel(None);
-    let stream_server = StreamServer::new(cache_dir, ytdlp_bin, app.clone());
+    let stream_server = StreamServer::new(cache_dir, covers_dir, ytdlp_bin, app.clone());
     app.manage(PlaybackHandle {
         server: stream_server.clone(),
         base_url: rx,
@@ -186,6 +196,24 @@ pub fn prefetch(app: &AppHandle, video_id: String) {
         app.state::<PlaybackHandle>()
             .server
             .ensure_cached_background(video_id);
+    });
+}
+
+/// `cover:base` — tell the view plane where to fetch artwork.
+///
+/// Shares `wait_for_base_url` with track resolution, so it is subject to
+/// the same 10s guard: if the server never binds, this answers nothing and
+/// `Thumbnail` simply keeps pointing at the CDN, which is exactly the
+/// behaviour that existed before the cache. Degrading to "no cache" beats
+/// degrading to "no artwork".
+pub fn cover_base(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let Some(base) = wait_for_base_url(&app).await else {
+            eprintln!("[covers] no server base URL — artwork will bypass the cache");
+            return;
+        };
+        emit(&app, AppEvent::CoverBase { url: format!("{base}/cover") });
     });
 }
 

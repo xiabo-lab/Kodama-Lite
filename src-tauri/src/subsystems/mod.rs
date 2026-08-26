@@ -10,6 +10,7 @@
 pub mod auth;
 pub mod cache;
 pub mod connectivity;
+pub mod covers;
 pub mod local;
 pub mod local_index;
 pub mod media;

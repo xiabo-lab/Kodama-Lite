@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
-    extract::{Path, Request, State as AxumState},
+    extract::{Path, Query, Request, State as AxumState},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -425,6 +425,11 @@ fn last_error_line(stderr: &str) -> String {
 #[derive(Clone)]
 pub struct StreamServer {
     cache_dir: PathBuf,
+    /// Where cover art is cached. A sibling of `cache_dir`, not a child,
+    /// so Settings' "clear audio cache" cannot take the artwork with it —
+    /// the artwork is what makes Home look right before the network
+    /// exists, and it is a few MB against the audio cache's GB.
+    covers_dir: PathBuf,
     downloads: DownloadMap,
     ytdlp_bin: PathBuf,
     /// Kept so a failed download can tell the UI *why*. Without this the
@@ -440,10 +445,16 @@ pub struct StreamServer {
 }
 
 impl StreamServer {
-    pub fn new(cache_dir: PathBuf, ytdlp_bin: PathBuf, app: tauri::AppHandle) -> Self {
+    pub fn new(
+        cache_dir: PathBuf,
+        covers_dir: PathBuf,
+        ytdlp_bin: PathBuf,
+        app: tauri::AppHandle,
+    ) -> Self {
         let ladder = Arc::new(load_ladder(&cache_dir));
         Self {
             cache_dir,
+            covers_dir,
             downloads: Arc::new(Mutex::new(HashMap::new())),
             ytdlp_bin,
             app,
@@ -501,6 +512,11 @@ pub async fn run(server: StreamServer, ready_tx: watch::Sender<Option<String>>) 
         // same `ServeFile` Range handling — the only difference is that the
         // bytes are already on disk and there is nothing to download.
         .route("/local/:local_id", get(local_handler))
+        // Cover art, cached to disk. Every `Thumbnail` in the view plane
+        // renders through here rather than straight at i.ytimg.com, so
+        // the feed restored from localStorage on a cold boot has its
+        // artwork too — see `subsystems::covers`.
+        .route("/cover", get(cover_handler))
         // The voice assistant's way in. Behind the same per-launch token as
         // everything else here, so knowing the port is still not enough to
         // drive the player.
@@ -1116,6 +1132,51 @@ async fn stream_handler(
 /// no traversal to defend against: an id we didn't mint simply isn't in
 /// the map. The `..`-style attack has no surface here at all, which is
 /// worth more than a sanitiser would be.
+/// `?u=<absolute https URL>` — the artwork URL InnerTube shipped.
+#[derive(serde::Deserialize)]
+struct CoverQuery {
+    u: String,
+}
+
+/// Serve one cover, from disk when we have it and from upstream once when
+/// we do not. See `subsystems::covers` for why this indirection exists at
+/// all; the short version is that a Pi with no network yet must still be
+/// able to paint the feed it restored from `localStorage`.
+///
+/// Every failure is one status. The view plane's `Thumbnail` falls back to
+/// its own glyph on *any* error, so distinguishing "bad host" from "we are
+/// offline" on the wire would buy nothing — the difference is in the
+/// journal, not in the response.
+async fn cover_handler(
+    AxumState(srv): AxumState<StreamServer>,
+    Query(q): Query<CoverQuery>,
+) -> Response {
+    match crate::subsystems::covers::get(&srv.covers_dir, &q.u).await {
+        Ok((bytes, content_type)) => (
+            StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, content_type),
+                // The bytes are already on our disk; this only saves the
+                // webview a round trip to us on a re-render. Artwork URLs
+                // are content-addressed by YouTube, so a long max-age
+                // cannot serve a stale image for a track.
+                (axum::http::header::CACHE_CONTROL, "public, max-age=604800"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(e) => {
+            if matches!(e, crate::subsystems::covers::CoverError::Rejected) {
+                // Not an outage — a URL we should never have been asked
+                // for. Worth a line, because it means the view plane and
+                // the allowlist have drifted.
+                eprintln!("[covers] refused non-allowlisted URL: {}", q.u);
+            }
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
+}
+
 async fn local_handler(
     AxumState(srv): AxumState<StreamServer>,
     Path(local_id): Path<String>,

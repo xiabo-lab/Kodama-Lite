@@ -77,6 +77,12 @@ export default function App() {
     // listening. Without asking again here, `ytdlpPhase` never leaves its
     // initial value and resume-on-startup waits forever.
     dispatch({ type: "ytdlp:check" });
+    // Where to fetch artwork from. Asked as early as the other three,
+    // because until it answers every `Thumbnail` points at the CDN — and
+    // on a cold boot the CDN is exactly what is not reachable yet. The
+    // answer is local (the server has already bound its port by now), so
+    // in practice it lands within a frame or two of the first paint.
+    dispatch({ type: "cover:base" });
     // No `home:load` here any more, and its absence is the point.
     //
     // It used to fire on this line, necessarily **anonymous** — the
