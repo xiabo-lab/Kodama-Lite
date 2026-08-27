@@ -447,16 +447,31 @@ the hotspot was not the carrier — the expected line at home on Wi-Fi.
 
 ### Updating
 
-Repeat step 2 with the newer version number; `apt` upgrades in place and keeps your
-settings, cache and session. If you have the repository cloned on the Pi, the same
-thing is scripted:
+**From the panel: Settings → About → Update.** One tap checks GitHub for a newer
+release; if there isn't one it says *"Current is the latest version."* and stops.
+If there is, it downloads that release's `.deb`, installs it with
+`sudo -n apt-get install -y`, and restarts the systemd user unit — so the app
+comes back on the new version by itself, with no keyboard and no SSH session
+involved. This is `scripts/update-pi.sh` moved inside the app; the row reports
+each step (checking / downloading / installing / restarting) because on a slow
+uplink the download alone is tens of seconds.
+
+Two things it needs, both already true of the setup below: **passwordless sudo**
+(it uses `sudo -n`, which fails in a second rather than waiting for a password
+nobody can type while driving) and the **`kodama-lite` user unit** (without it the
+install still succeeds and the row asks you to relaunch by hand instead).
+
+From a shell, the same thing is scripted — and still the way to go if the app
+itself won't start:
 
 ```bash
 bash scripts/update-pi.sh          # check, then install if newer
 bash scripts/update-pi.sh --check  # report only, change nothing
 ```
 
-Restart it afterwards with `systemctl --user restart kodama-lite`.
+Restart it afterwards with `systemctl --user restart kodama-lite`. Or repeat
+step 2 by hand with the newer version number; `apt` upgrades in place either way
+and keeps your settings, cache and session.
 
 ### If something is wrong
 

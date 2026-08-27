@@ -51,6 +51,7 @@ pub async fn handle_command(app: AppHandle, command: Command) {
         Command::CacheClear => subsystems::cache::clear(&app),
         Command::VolumeGet => subsystems::volume::get(&app),
         Command::LocalScan => subsystems::local::scan(&app),
+        Command::UpdateCheck => subsystems::update::check(&app),
         Command::AppQuit => subsystems::quit(&app),
     }
 }

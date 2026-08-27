@@ -87,8 +87,10 @@ tokio = { version = "1", features = [
 axum = "0.7"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
-# Only used to fetch the managed yt-dlp binary (ytdlp.rs) in Phase 2;
-# Phase 3's network subsystem (InnerTube) will reuse this.
+# Fetches the managed yt-dlp binary (ytdlp.rs), cover art (subsystems/
+# covers.rs), and the release `.deb` for the in-app updater
+# (subsystems/update.rs). NOT the InnerTube path — that is JS-side, over
+# tauri-plugin-http; see the note on that dependency above.
 reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
 
 

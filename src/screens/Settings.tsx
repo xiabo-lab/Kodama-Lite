@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   DatabaseIcon,
+  DownloadIcon,
   InfoIcon,
   LogInIcon,
   LogOutIcon,
@@ -31,6 +32,8 @@ import { useSettingsStore, type ThemeMode } from "@/store/settingsStore";
 import { useAuthStore } from "@/store/authStore";
 import { formatBytes, useCacheStore } from "@/store/cacheStore";
 import { clearLyricsCache, lyricsCacheStats } from "@/store/lyricsStore";
+import { UPDATE_BUSY_PHASES, useUpdateStore } from "@/store/updateStore";
+import type { UpdatePhase } from "@/protocol";
 import { cn } from "@/lib/utils";
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -153,7 +156,46 @@ function ConnectionSection() {
   );
 }
 
+/**
+ * What each update phase says under the version number. The phases that
+ * take real time (download, install) name the version they are working
+ * towards, because on a slow uplink this line is on screen long enough
+ * to be read properly.
+ */
+function updateMessage(
+  phase: UpdatePhase | "idle",
+  version?: string,
+  message?: string,
+): string | null {
+  switch (phase) {
+    case "checking":
+      return "Checking GitHub for a newer version…";
+    case "up-to-date":
+      return "Current is the latest version.";
+    case "downloading":
+      return `Downloading ${version ?? "the update"}…`;
+    case "installing":
+      return `Installing ${version ?? "the update"}…`;
+    case "restarting":
+      return `Updated to ${version ?? "the latest version"}. Restarting…`;
+    case "restart-required":
+      return `Updated to ${version ?? "the latest version"}. Restart Kodama-Lite to finish.`;
+    case "error":
+      return message ?? "The update failed.";
+    case "idle":
+      return null;
+  }
+}
+
 function AboutSection() {
+  const phase = useUpdateStore((s) => s.phase);
+  const version = useUpdateStore((s) => s.version);
+  const message = useUpdateStore((s) => s.message);
+  const check = useUpdateStore((s) => s.check);
+  const busy = UPDATE_BUSY_PHASES.includes(phase);
+
+  const status = updateMessage(phase, version, message);
+
   return (
     <>
       <SectionTitle>About</SectionTitle>
@@ -161,7 +203,29 @@ function AboutSection() {
         <SettingRow
           icon={InfoIcon}
           title={`Kodama-Lite ${__APP_VERSION__}`}
-          description="A fluid YouTube Music client for the Raspberry Pi 5 in-car display."
+          description={
+            status ? (
+              // The tagline is what this row says at rest; once the
+              // button has been pressed the answer to *that* is the only
+              // thing worth the space.
+              <span className={cn(phase === "error" && "text-brand")}>
+                {status}
+              </span>
+            ) : (
+              "A fluid YouTube Music client for the Raspberry Pi 5 in-car display."
+            )
+          }
+          control={
+            <button
+              type="button"
+              disabled={busy}
+              onClick={check}
+              className="flex min-h-11 shrink-0 items-center gap-2 rounded-md border border-input px-4 text-sm font-medium transition-colors hover:bg-accent disabled:opacity-60"
+            >
+              <DownloadIcon className={cn("size-4", busy && "animate-pulse")} />
+              {!busy ? "Update" : phase === "checking" ? "Checking…" : "Updating…"}
+            </button>
+          }
         />
       </Group>
     </>

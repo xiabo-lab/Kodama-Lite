@@ -104,6 +104,11 @@ pub enum Command {
     /// `subsystems::local` for why that is our job here.
     #[serde(rename = "local:scan")]
     LocalScan,
+    /// Check GitHub for a newer release and, if there is one, install it
+    /// and restart. See `subsystems::update` for why check and install
+    /// are one command rather than two.
+    #[serde(rename = "update:check")]
+    UpdateCheck,
     /// Close the app — the Pi runs it full-screen with no desktop chrome,
     /// so the Settings screen's Quit row is the only way out.
     #[serde(rename = "app:quit")]
@@ -233,4 +238,20 @@ pub enum AppEvent {
     /// message that says which, because the three have different fixes.
     #[serde(rename = "local:error")]
     LocalError { message: String },
+    /// Where the in-app update has got to. `phase` is one of `checking` |
+    /// `up-to-date` | `downloading` | `installing` | `restarting` |
+    /// `restart-required` | `error`; see the TS mirror for what each one
+    /// puts on screen.
+    ///
+    /// `version` is whichever version the phase is about — the one
+    /// already installed for `up-to-date`, the one being fetched for
+    /// everything after it.
+    #[serde(rename = "update:state")]
+    UpdateState {
+        phase: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
 }

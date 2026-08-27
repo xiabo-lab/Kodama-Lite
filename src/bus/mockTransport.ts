@@ -173,6 +173,23 @@ export function createMockTransport(): Transport {
             30,
           );
           break;
+        case "update:check":
+          // Deliberately NOT faked, for the same reason as `auth:signIn`
+          // below: the interesting half of this command is `apt-get
+          // install` and a systemd restart, neither of which exists in a
+          // browser tab. A mock "you're up to date" would make the row
+          // look like it worked somewhere it cannot.
+          setTimeout(
+            () =>
+              emit({
+                type: "update:state",
+                phase: "error",
+                message:
+                  "Updating needs the desktop app — the mock data plane has no package manager.",
+              }),
+            120,
+          );
+          break;
         case "app:quit":
           // A browser tab can't close itself unless script opened it, and
           // faking it (blanking the page) would make the Quit row look

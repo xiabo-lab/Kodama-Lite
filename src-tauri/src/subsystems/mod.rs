@@ -15,6 +15,7 @@ pub mod local;
 pub mod local_index;
 pub mod media;
 pub mod playback;
+pub mod update;
 pub mod volume;
 
 use tauri::AppHandle;

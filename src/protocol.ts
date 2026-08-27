@@ -82,6 +82,11 @@ export type Command =
    *  Mounts the drive first if nothing else has; see
    *  `subsystems/local.rs` for why that has to be the app's job here. */
   | { type: "local:scan" }
+  /** Check GitHub for a newer release and, if there is one, install it
+   *  and restart. Check and install are one command, not two: the panel
+   *  has no keyboard and the only sensible answer to "an update is
+   *  available" on it is yes. See `subsystems/update.rs`. */
+  | { type: "update:check" }
   /** Close the app. The Pi boots straight into this window full-screen
    *  with no desktop chrome around it, so Settings' Quit row is the only
    *  way out that isn't an SSH session. */
@@ -90,6 +95,26 @@ export type Command =
 // ── Events: data plane → view plane ───────────────────────────────────
 
 export type YtdlpPhase = "downloading" | "ready" | "error";
+
+/**
+ * How far the in-app update has got.
+ *
+ * `restarting` is the happy ending and the app is expected to disappear
+ * moments after it — systemd stops the unit and starts the new binary.
+ * `restart-required` is the same install having succeeded somewhere
+ * systemd is not managing us (a dev build, or a launch from the desktop
+ * icon): the new version is on disk and the user has to relaunch. They
+ * are two states rather than one because only one of them asks the user
+ * to do something.
+ */
+export type UpdatePhase =
+  | "checking"
+  | "up-to-date"
+  | "downloading"
+  | "installing"
+  | "restarting"
+  | "restart-required"
+  | "error";
 
 /**
  * Why a track wouldn't play.
@@ -225,7 +250,12 @@ export type AppEvent =
   | { type: "local:scanned"; source: string; tracks: LocalTrack[]; partial: boolean }
   /** No drive, no music on it, or it couldn't be mounted — always with a
    *  message saying which, because the three have different fixes. */
-  | { type: "local:error"; message: string };
+  | { type: "local:error"; message: string }
+  /** Where the in-app update has got to. `version` is whichever version
+   *  the phase is about: the installed one for `up-to-date`, the incoming
+   *  one for every phase after it. `message` only ever accompanies
+   *  `error`. */
+  | { type: "update:state"; phase: UpdatePhase; version?: string; message?: string };
 
 /**
  * One playable file from a USB drive.

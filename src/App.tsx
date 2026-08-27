@@ -19,6 +19,7 @@ import { useRadioStore } from "@/store/radioStore";
 import { useLyricsStore } from "@/store/lyricsStore";
 import { useLikedSongsStore } from "@/store/likedSongsStore";
 import { useLocalStore } from "@/store/localStore";
+import { useUpdateStore } from "@/store/updateStore";
 import { AppShell } from "@/app/AppShell";
 
 /**
@@ -41,6 +42,7 @@ export default function App() {
     useCacheStore.getState().applyEvents(events);
     usePlaybackStore.getState().applyEvents(events);
     useLocalStore.getState().applyEvents(events);
+    useUpdateStore.getState().applyEvents(events);
     // Voice commands are not a store — most of them span several — so they
     // are handled here rather than being fanned out like the rest. See
     // `lib/voiceControl.ts`; every branch calls the same store action the
