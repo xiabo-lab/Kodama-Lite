@@ -163,14 +163,13 @@
 #     so a mid-drive drop is seen at once instead of up to 60s later. In
 #     listen mode noticing is ALL that happens — see the top of this file
 #     for why chasing a disconnect is what caused the bug.
-#   * The profile is checked, not just the connection. The documented failure
-#     mode is a link that connects fine and lands on headset-head-unit (HFP)
-#     instead of a2dp-sink: silence, no track info, dead transport buttons,
-#     while every connection-level check says healthy.
-#   * This script REPORTS a bad profile, it does not fix one. `pactl` is not
-#     installed and `wpctl` cannot switch card profiles, so the only lever
-#     available is a disconnect/reconnect cycle — too blunt to fire
-#     automatically off a heuristic that has not yet been seen to trigger.
+#   * The profile and direction are checked, not just the connection. Two
+#     connected-but-silent failures have existed: headset-head-unit (HFP), and
+#     the Tesla negotiating itself as A2DP Source so audio flows Tesla -> Pi.
+#     The latter leaves AVRCP buttons working, which can make the link look
+#     healthy. It is identified exactly by bluez_input + a2dp-source and fixed
+#     without dropping the ACL: disconnect the car's Audio Source profile,
+#     then connect its Audio Sink profile over the already-live link.
 #   * ONE device, by address. Nothing here enumerates or touches any other
 #     paired device, so a phone or a speaker can be used normally.
 #   * Listen mode cannot fight a deliberate Disconnect on the car's screen,
@@ -194,6 +193,11 @@ MODE="${TESLA_CONNECT_MODE:-listen}"
 # runs for the length of every drive, and a heartbeat that scrolls is a
 # heartbeat nobody reads.
 IDLE_REPORT_SEC="${TESLA_IDLE_REPORT_SEC:-600}"
+
+# A profile can change without Device1.Connected changing. Re-check quietly
+# while the ACL stays up so a mid-drive reversal, or a transient failure of
+# the first correction, does not remain silent until the next reconnect.
+PROFILE_CHECK_SEC="${TESLA_PROFILE_CHECK_SEC:-60}"
 
 # Backoff. Fast while the car is plausibly still waking with the ignition,
 # then geometric so a car that is simply not there costs one page a minute
@@ -233,6 +237,7 @@ ADAPTER_WAIT_SEC="${TESLA_ADAPTER_WAIT_TICKS:-150}"
 # A2DP Source and AVRCP Target. Their presence on the adapter is what says
 # PipeWire has registered its media endpoints with bluetoothd.
 UUID_A2DP_SOURCE="0000110a-0000-1000-8000-00805f9b34fb"
+UUID_A2DP_SINK="0000110b-0000-1000-8000-00805f9b34fb"
 UUID_AVRCP_TARGET="0000110c-0000-1000-8000-00805f9b34fb"
 
 MAC_PATH="${MAC//:/_}"
@@ -572,8 +577,32 @@ retry_delay() {
 
 # ── profile ───────────────────────────────────────────────────────────
 
+# The Tesla advertises both A2DP Source and Sink. If it selects Source, the
+# ACL and AVRCP link are healthy but audio flows from the car into the Pi.
+# Switching individual remote profiles preserves that ACL, unlike a full
+# disconnect (which this Tesla may refuse when the Pi tries to re-open it).
+correct_reversed_a2dp() {
+  local dev="$1" out
+
+  warn "profile check: reversed A2DP direction (Tesla -> Pi); switching the live link to Pi -> Tesla"
+  out=$(busctl call org.bluez "$dev" org.bluez.Device1 DisconnectProfile \
+        s "$UUID_A2DP_SOURCE" 2>&1) || {
+    err "could not disconnect Tesla Audio Source profile: ${out#Call failed: }"
+    return 1
+  }
+
+  sleep 1
+  out=$(busctl call org.bluez "$dev" org.bluez.Device1 ConnectProfile \
+        s "$UUID_A2DP_SINK" 2>&1) || {
+    err "could not connect Tesla Audio Sink profile: ${out#Call failed: }"
+    return 1
+  }
+
+  log "profile correction complete — Tesla Audio Sink connected; PipeWire will move the app stream"
+}
+
 profile_report() {
-  local dump names profs
+  local dev="$1" quiet="${2:-0}" dump names profs
   dump=$(sudo -u "$PW_USER" env XDG_RUNTIME_DIR="/run/user/$PW_UID" \
          timeout 10 pw-dump 2>/dev/null)
   if [ -z "$dump" ]; then
@@ -592,11 +621,15 @@ profile_report() {
     warn "profile check: BlueZ reports connected but PipeWire has no bluez node — there is no audio path to the car"
     return
   fi
-  log "profile check: nodes [ ${names}] profiles [ ${profs:-none reported} ]"
+  if [ "$quiet" != "1" ]; then
+    log "profile check: nodes [ ${names}] profiles [ ${profs:-none reported} ]"
+  fi
   case "$names $profs" in
+    *bluez_input*|*a2dp-source*)
+      correct_reversed_a2dp "$dev" ;;
     *headset*|*handsfree*|*hfp*|*hsp*)
       warn "profile check: an HFP/headset profile is active — this is the 'connected but silent, no track info, dead buttons' state. Recovery is a disconnect + reconnect." ;;
-    *a2dp*)
+    *bluez_output*|*a2dp-sink*)
       : ;;
     *)
       log "profile check: could not positively confirm a2dp-sink from the names above (not necessarily wrong — check them against a known-good drive)" ;;
@@ -699,6 +732,7 @@ last_summary=0
 was_connected=-1
 disconnected_at=0
 last_idle_report=0
+last_profile_check=0
 
 while true; do
   hci=$(adapter_hci)
@@ -725,10 +759,16 @@ while true; do
       fi
       check_bond "$dev"
       sleep 3          # give WirePlumber time to build the nodes
-      profile_report
+      profile_report "$dev"
+      last_profile_check=$(date +%s)
       was_connected=1
       fail_streak=0
       last_reason=""
+    fi
+    now=$(date +%s)
+    if [ $((now - last_profile_check)) -ge "$PROFILE_CHECK_SEC" ]; then
+      profile_report "$dev" 1
+      last_profile_check=$(date +%s)
     fi
     wait_for_bluez_event 60
     if ! is_connected "$dev"; then

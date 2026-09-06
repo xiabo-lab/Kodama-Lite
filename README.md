@@ -677,6 +677,13 @@ What's real:
   own `[Policy] ReconnectAttempts` is set to 0 for the same reason. Verified: **0 HCI
   commands sent in 90s** while disconnected.
 
+  The Tesla exposes both A2DP directions and can initially negotiate Tesla -> Pi:
+  steering-wheel buttons work over AVRCP while the app audio stays on the Pi. The
+  service now identifies that exact `bluez_input` / `a2dp-source` state and switches
+  only the two media profiles on the existing ACL, preserving the car-initiated link.
+  Both roles remain advertised deliberately: removing the Pi's sink role makes this
+  Tesla drop the ACL and stop reconnecting before the profile can be corrected.
+
   It also brings the Pi up in a deliberate order, because being reachable too early is
   its own bug. `bluetoothd` is ready at 5.4s but PipeWire does not register the A2DP
   endpoints until ~8s, and a car that pages in between completes an ACL and then fails
