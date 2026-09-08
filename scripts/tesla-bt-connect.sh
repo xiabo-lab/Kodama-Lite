@@ -159,10 +159,12 @@
 #     and it floods the 2.4GHz radio the Pi 5 shares with WiFi, which is the
 #     known cause of the A2DP stuttering. It would trade a connect problem
 #     for an audio one.
-#   * Disconnects are noticed from a BlueZ D-Bus signal rather than by polling,
-#     so a mid-drive drop is seen at once instead of up to 60s later. In
-#     listen mode noticing is ALL that happens — see the top of this file
-#     for why chasing a disconnect is what caused the bug.
+#   * Disconnects are normally noticed from a BlueZ D-Bus signal. A bounded
+#     one-second recheck closes the race between reading Connected=false and
+#     subscribing to the next signal; without it, a connection in that gap sat
+#     unnoticed until the old 60-second monitor timeout. In listen mode noticing
+#     is ALL that happens — see the top of this file for why chasing a
+#     disconnect is what caused the bug.
 #   * The profile and direction are checked, not just the connection. Two
 #     connected-but-silent failures have existed: headset-head-unit (HFP), and
 #     the Tesla negotiating itself as A2DP Source so audio flows Tesla -> Pi.
@@ -198,6 +200,11 @@ IDLE_REPORT_SEC="${TESLA_IDLE_REPORT_SEC:-600}"
 # while the ACL stays up so a mid-drive reversal, or a transient failure of
 # the first correction, does not remain silent until the next reconnect.
 PROFILE_CHECK_SEC="${TESLA_PROFILE_CHECK_SEC:-60}"
+
+# While disconnected, or while PipeWire has not yet confirmed a healthy Tesla
+# output node, never disappear into the normal 60-second healthy wait. One
+# second is quick enough to feel immediate and cheap for a single D-Bus query.
+PROFILE_RETRY_SEC="${TESLA_PROFILE_RETRY_SEC:-1}"
 
 # Backoff. Fast while the car is plausibly still waking with the ignition,
 # then geometric so a car that is simply not there costs one page a minute
@@ -606,8 +613,8 @@ profile_report() {
   dump=$(sudo -u "$PW_USER" env XDG_RUNTIME_DIR="/run/user/$PW_UID" \
          timeout 10 pw-dump 2>/dev/null)
   if [ -z "$dump" ]; then
-    warn "profile check: pw-dump returned nothing — PipeWire session not reachable"
-    return
+    [ "$quiet" = "1" ] || warn "profile check: pw-dump returned nothing — PipeWire session not reachable; retrying"
+    return 1
   fi
   # Scoped to this car's address. A bare "bluez" prefix also matches
   # bluez_midi.server, which is always present and would mask the
@@ -618,22 +625,29 @@ profile_report() {
           | sed 's/.*: *"//; s/"$//' | sort -u | tr '\n' ' ')
 
   if [ -z "$names" ]; then
-    warn "profile check: BlueZ reports connected but PipeWire has no bluez node — there is no audio path to the car"
-    return
+    [ "$quiet" = "1" ] || warn "profile check: BlueZ reports connected but PipeWire has no Tesla node yet — retrying"
+    return 1
   fi
   if [ "$quiet" != "1" ]; then
     log "profile check: nodes [ ${names}] profiles [ ${profs:-none reported} ]"
   fi
   case "$names $profs" in
     *bluez_input*|*a2dp-source*)
-      correct_reversed_a2dp "$dev" ;;
+      # ConnectProfile returning only means BlueZ accepted the request. Keep
+      # the state unhealthy until a later dump proves bluez_output/a2dp-sink.
+      correct_reversed_a2dp "$dev" || return 1
+      return 1 ;;
     *headset*|*handsfree*|*hfp*|*hsp*)
       warn "profile check: an HFP/headset profile is active — this is the 'connected but silent, no track info, dead buttons' state. Recovery is a disconnect + reconnect." ;;
     *bluez_output*|*a2dp-sink*)
-      : ;;
+      return 0 ;;
     *)
-      log "profile check: could not positively confirm a2dp-sink from the names above (not necessarily wrong — check them against a known-good drive)" ;;
+      [ "$quiet" = "1" ] || log "profile check: could not positively confirm a2dp-sink from the names above (not necessarily wrong — check them against a known-good drive)" ;;
   esac
+
+  # Unknown and HFP states are fully formed profiles, not the short
+  # no-node race. Their existing warning is enough; keep the normal cadence.
+  return 0
 }
 
 # ── waiting ───────────────────────────────────────────────────────────
@@ -650,7 +664,7 @@ wait_for_bluez_event() {
     timeout "$1" dbus-monitor --system \
       "type='signal',sender='org.bluez',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'" \
       2>/dev/null | grep -q -m1 'PropertiesChanged' || true
-    sleep 1   # floor, so a burst of signals can't spin this loop
+    sleep 0.2 # floor, so a burst of signals can't spin this loop
   else
     sleep "$1"
   fi
@@ -733,6 +747,7 @@ was_connected=-1
 disconnected_at=0
 last_idle_report=0
 last_profile_check=0
+profile_healthy=0
 
 while true; do
   hci=$(adapter_hci)
@@ -758,19 +773,31 @@ while true; do
         log "Tesla connected via $hci"
       fi
       check_bond "$dev"
-      sleep 3          # give WirePlumber time to build the nodes
-      profile_report "$dev"
-      last_profile_check=$(date +%s)
       was_connected=1
+      profile_healthy=0
+      last_profile_check=0
       fail_streak=0
       last_reason=""
     fi
     now=$(date +%s)
-    if [ $((now - last_profile_check)) -ge "$PROFILE_CHECK_SEC" ]; then
-      profile_report "$dev" 1
+    if [ "$profile_healthy" != "1" ]; then
+      quiet=1
+      [ "$last_profile_check" -eq 0 ] && quiet=0
+      if profile_report "$dev" "$quiet"; then
+        profile_healthy=1
+      fi
+      last_profile_check=$(date +%s)
+    elif [ $((now - last_profile_check)) -ge "$PROFILE_CHECK_SEC" ]; then
+      if ! profile_report "$dev" 1; then
+        profile_healthy=0
+      fi
       last_profile_check=$(date +%s)
     fi
-    wait_for_bluez_event 60
+    if [ "$profile_healthy" = "1" ]; then
+      wait_for_bluez_event "$PROFILE_CHECK_SEC"
+    else
+      wait_for_bluez_event "$PROFILE_RETRY_SEC"
+    fi
     if ! is_connected "$dev"; then
       was_connected=0
       disconnected_at=$(date +%s)
@@ -807,7 +834,9 @@ while true; do
       log "Ready and connectable on $hci — waiting for the Tesla to connect"
       last_idle_report=$now
     fi
-    wait_for_bluez_event 60
+    # A signal can land after is_connected() above but before dbus-monitor
+    # subscribes. Bound that race so a click in the car is noticed promptly.
+    wait_for_bluez_event "$PROFILE_RETRY_SEC"
     continue
   fi
 

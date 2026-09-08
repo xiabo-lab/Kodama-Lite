@@ -683,6 +683,9 @@ What's real:
   only the two media profiles on the existing ACL, preserving the car-initiated link.
   Both roles remain advertised deliberately: removing the Pi's sink role makes this
   Tesla drop the ACL and stop reconnecting before the profile can be corrected.
+  Connection detection and unready PipeWire profiles are retried every second until a
+  real `bluez_output` / `a2dp-sink` node is confirmed; the earlier fixed three-second
+  delay could miss node creation and then wait a full minute before trying again.
 
   It also brings the Pi up in a deliberate order, because being reachable too early is
   its own bug. `bluetoothd` is ready at 5.4s but PipeWire does not register the A2DP
