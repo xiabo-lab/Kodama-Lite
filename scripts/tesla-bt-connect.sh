@@ -160,7 +160,7 @@
 #     known cause of the A2DP stuttering. It would trade a connect problem
 #     for an audio one.
 #   * Disconnects are normally noticed from a BlueZ D-Bus signal. A bounded
-#     one-second recheck closes the race between reading Connected=false and
+#     half-second recheck closes the race between reading Connected=false and
 #     subscribing to the next signal; without it, a connection in that gap sat
 #     unnoticed until the old 60-second monitor timeout. In listen mode noticing
 #     is ALL that happens — see the top of this file for why chasing a
@@ -169,9 +169,10 @@
 #     connected-but-silent failures have existed: headset-head-unit (HFP), and
 #     the Tesla negotiating itself as A2DP Source so audio flows Tesla -> Pi.
 #     The latter leaves AVRCP buttons working, which can make the link look
-#     healthy. It is identified exactly by bluez_input + a2dp-source and fixed
-#     without dropping the ACL: disconnect the car's Audio Source profile,
-#     then connect its Audio Sink profile over the already-live link.
+#     healthy. It is identified exactly by bluez_input + a2dp-source. As soon
+#     as the car-created ACL exists, request the car's Audio Sink first; only
+#     after bluez_output exists do we remove its Audio Source. This
+#     make-before-break order avoids a silent gap and keeps the ACL alive.
 #   * ONE device, by address. Nothing here enumerates or touches any other
 #     paired device, so a phone or a speaker can be used normally.
 #   * Listen mode cannot fight a deliberate Disconnect on the car's screen,
@@ -202,9 +203,21 @@ IDLE_REPORT_SEC="${TESLA_IDLE_REPORT_SEC:-600}"
 PROFILE_CHECK_SEC="${TESLA_PROFILE_CHECK_SEC:-60}"
 
 # While disconnected, or while PipeWire has not yet confirmed a healthy Tesla
-# output node, never disappear into the normal 60-second healthy wait. One
-# second is quick enough to feel immediate and cheap for a single D-Bus query.
-PROFILE_RETRY_SEC="${TESLA_PROFILE_RETRY_SEC:-1}"
+# output node, never disappear into the normal 60-second healthy wait. Two
+# checks per second are cheap for one local D-Bus property and close the
+# click-to-audio budget without making the Pi page the car.
+PROFILE_RETRY_SEC="${TESLA_PROFILE_RETRY_SEC:-0.5}"
+
+# A profile request on an already-live ACL should finish promptly. busctl's
+# default method timeout is long enough to explain the observed ~35-second
+# silence, so bound it and let the half-second state loop retry if necessary.
+PROFILE_CONNECT_TIMEOUT_SEC="${TESLA_PROFILE_CONNECT_TIMEOUT_SEC:-1}"
+PROFILE_CONNECT_RETRY_SEC="${TESLA_PROFILE_CONNECT_RETRY_SEC:-2}"
+PROFILE_DUMP_TIMEOUT_SEC="${TESLA_PROFILE_DUMP_TIMEOUT_SEC:-1}"
+# Prefer make-before-break, but not forever: some AVDTP peers allow only one
+# direction at a time. If the output is still absent after this grace period,
+# remove the reverse source once and immediately request the sink again.
+PROFILE_HANDOFF_GRACE_SEC="${TESLA_PROFILE_HANDOFF_GRACE_SEC:-2}"
 
 # Backoff. Fast while the car is plausibly still waking with the ignition,
 # then geometric so a car that is simply not there costs one page a minute
@@ -584,34 +597,76 @@ retry_delay() {
 
 # ── profile ───────────────────────────────────────────────────────────
 
-# The Tesla advertises both A2DP Source and Sink. If it selects Source, the
-# ACL and AVRCP link are healthy but audio flows from the car into the Pi.
-# Switching individual remote profiles preserves that ACL, unlike a full
-# disconnect (which this Tesla may refuse when the Pi tries to re-open it).
-correct_reversed_a2dp() {
+# The Tesla advertises both A2DP directions and uses its Source profile to
+# create the ACL. Do not tear that path down first: ask for the desired remote
+# Sink on the live ACL, then let profile_report remove Source only after
+# PipeWire proves the output transport exists.
+request_tesla_sink() {
+  local dev="$1" quiet="${2:-0}" now out rc
+
+  now=$(date +%s)
+  if [ "$last_sink_request" -gt 0 ] && \
+     [ $((now - last_sink_request)) -lt "$PROFILE_CONNECT_RETRY_SEC" ]; then
+    return 1
+  fi
+
+  last_sink_request=$now
+  [ "$quiet" = "1" ] || log "requesting Tesla Audio Sink immediately on the live ACL (Pi -> Tesla)"
+  out=$(timeout "$PROFILE_CONNECT_TIMEOUT_SEC" \
+        busctl call org.bluez "$dev" org.bluez.Device1 ConnectProfile \
+        s "$UUID_A2DP_SINK" --timeout="$PROFILE_CONNECT_TIMEOUT_SEC" 2>&1)
+  rc=$?
+  # Measure the retry interval from completion, not start. Otherwise a call
+  # that uses its full timeout is immediately duplicated by profile_report.
+  last_sink_request=$(date +%s)
+
+  if [ "$rc" -eq 0 ]; then
+    return 0
+  fi
+  case "$out" in
+    *AlreadyConnected*|*InProgress*) return 0 ;;
+  esac
+  [ "$quiet" = "1" ] || warn "Tesla Audio Sink request did not finish in ${PROFILE_CONNECT_TIMEOUT_SEC}s (${out#Call failed: }); checking the graph and retrying"
+  return 1
+}
+
+# Once the desired output exists, remove the reverse Tesla -> Pi media profile.
+# DisconnectProfile does not tear down the ACL while the Sink transport is up.
+drop_tesla_source() {
   local dev="$1" out
 
-  warn "profile check: reversed A2DP direction (Tesla -> Pi); switching the live link to Pi -> Tesla"
-  out=$(busctl call org.bluez "$dev" org.bluez.Device1 DisconnectProfile \
-        s "$UUID_A2DP_SOURCE" 2>&1) || {
-    err "could not disconnect Tesla Audio Source profile: ${out#Call failed: }"
+  out=$(timeout 1 busctl call org.bluez "$dev" \
+        org.bluez.Device1 DisconnectProfile s "$UUID_A2DP_SOURCE" \
+        --timeout=1 2>&1) || {
+    warn "could not remove the reverse Tesla Audio Source profile: ${out#Call failed: }"
     return 1
   }
+  log "removed the reverse Tesla -> Pi media profile"
+}
 
-  sleep 1
-  out=$(busctl call org.bluez "$dev" org.bluez.Device1 ConnectProfile \
-        s "$UUID_A2DP_SINK" 2>&1) || {
-    err "could not connect Tesla Audio Sink profile: ${out#Call failed: }"
-    return 1
-  }
+# Drive the desired direction independently of PipeWire node timing. First ask
+# for the sink while the reverse stream keeps the ACL alive. If the peer cannot
+# form both transports, fall back once to break-before-make after a short grace.
+drive_sink_handoff() {
+  local dev="$1" quiet="${2:-0}" now
 
-  log "profile correction complete — Tesla Audio Sink connected; PipeWire will move the app stream"
+  now=$(date +%s)
+  if [ "$source_drop_attempted" != "1" ] && \
+     [ "$profile_transition_started" -gt 0 ] && \
+     [ $((now - profile_transition_started)) -ge "$PROFILE_HANDOFF_GRACE_SEC" ]; then
+    warn "Tesla output not visible after ${PROFILE_HANDOFF_GRACE_SEC}s; removing the reverse source once, then retrying the sink"
+    drop_tesla_source "$dev" || true
+    source_drop_attempted=1
+    last_sink_request=0
+  fi
+
+  request_tesla_sink "$dev" "$quiet" || true
 }
 
 profile_report() {
   local dev="$1" quiet="${2:-0}" dump names profs
   dump=$(sudo -u "$PW_USER" env XDG_RUNTIME_DIR="/run/user/$PW_UID" \
-         timeout 10 pw-dump 2>/dev/null)
+         timeout "$PROFILE_DUMP_TIMEOUT_SEC" pw-dump 2>/dev/null)
   if [ -z "$dump" ]; then
     [ "$quiet" = "1" ] || warn "profile check: pw-dump returned nothing — PipeWire session not reachable; retrying"
     return 1
@@ -631,15 +686,23 @@ profile_report() {
   if [ "$quiet" != "1" ]; then
     log "profile check: nodes [ ${names}] profiles [ ${profs:-none reported} ]"
   fi
-  case "$names $profs" in
-    *bluez_input*|*a2dp-source*)
-      # ConnectProfile returning only means BlueZ accepted the request. Keep
-      # the state unhealthy until a later dump proves bluez_output/a2dp-sink.
-      correct_reversed_a2dp "$dev" || return 1
+  case "$names" in
+    *bluez_output*)
+      # During make-before-break both nodes can briefly coexist. Audio can
+      # already flow to the car; now remove only the reverse media profile.
+      case "$names" in
+        *bluez_input*)
+          drop_tesla_source "$dev" || true
+          source_drop_attempted=1 ;;
+      esac
+      return 0 ;;
+    *bluez_input*)
       return 1 ;;
+  esac
+  case "$names $profs" in
     *headset*|*handsfree*|*hfp*|*hsp*)
       warn "profile check: an HFP/headset profile is active — this is the 'connected but silent, no track info, dead buttons' state. Recovery is a disconnect + reconnect." ;;
-    *bluez_output*|*a2dp-sink*)
+    *a2dp-sink*)
       return 0 ;;
     *)
       [ "$quiet" = "1" ] || log "profile check: could not positively confirm a2dp-sink from the names above (not necessarily wrong — check them against a known-good drive)" ;;
@@ -748,6 +811,9 @@ disconnected_at=0
 last_idle_report=0
 last_profile_check=0
 profile_healthy=0
+last_sink_request=0
+profile_transition_started=0
+source_drop_attempted=0
 
 while true; do
   hci=$(adapter_hci)
@@ -776,13 +842,20 @@ while true; do
       was_connected=1
       profile_healthy=0
       last_profile_check=0
+      last_sink_request=0
+      profile_transition_started=$(date +%s)
+      source_drop_attempted=0
       fail_streak=0
       last_reason=""
+      # Do not wait for the reverse bluez_input node to appear. The ACL is
+      # already live, so ask for the desired Pi -> Tesla profile immediately.
+      drive_sink_handoff "$dev" || true
     fi
     now=$(date +%s)
     if [ "$profile_healthy" != "1" ]; then
       quiet=1
       [ "$last_profile_check" -eq 0 ] && quiet=0
+      drive_sink_handoff "$dev" 1
       if profile_report "$dev" "$quiet"; then
         profile_healthy=1
       fi
@@ -790,6 +863,9 @@ while true; do
     elif [ $((now - last_profile_check)) -ge "$PROFILE_CHECK_SEC" ]; then
       if ! profile_report "$dev" 1; then
         profile_healthy=0
+        profile_transition_started=$(date +%s)
+        source_drop_attempted=0
+        last_sink_request=0
       fi
       last_profile_check=$(date +%s)
     fi

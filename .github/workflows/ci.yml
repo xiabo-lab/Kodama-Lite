@@ -21,6 +21,8 @@ jobs:
         run: npx tsc --noEmit
       - name: Test
         run: npx vitest run
+      - name: Test Tesla Bluetooth handoff
+        run: bash scripts/tesla-bt-connect-selftest.sh
 
   rust:
     # Kodama-Lite is Pi-only, so this keeps the Linux/arm64 build honest —

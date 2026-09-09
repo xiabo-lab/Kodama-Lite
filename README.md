@@ -683,9 +683,16 @@ What's real:
   only the two media profiles on the existing ACL, preserving the car-initiated link.
   Both roles remain advertised deliberately: removing the Pi's sink role makes this
   Tesla drop the ACL and stop reconnecting before the profile can be corrected.
-  Connection detection and unready PipeWire profiles are retried every second until a
+  Connection detection and unready PipeWire profiles are retried twice per second until a
   real `bluez_output` / `a2dp-sink` node is confirmed; the earlier fixed three-second
   delay could miss node creation and then wait a full minute before trying again.
+  The desired Tesla sink is now requested immediately when its ACL appears, before the
+  reverse source is removed. Each D-Bus request is capped at one second, each PipeWire
+  inspection at one second, and failures are retried. If the peer cannot form both A2DP
+  directions concurrently, a two-second fallback removes the reverse source once and
+  retries the sink; once `bluez_output` is confirmed, any remaining reverse source is
+  cleaned up without dropping the car-created ACL. These bounds keep the service-side
+  handoff budget below five seconds; the real car remains the final timing authority.
 
   It also brings the Pi up in a deliberate order, because being reachable too early is
   its own bug. `bluetoothd` is ready at 5.4s but PipeWire does not register the A2DP
