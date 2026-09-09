@@ -58,7 +58,7 @@ jobs:
           set -euo pipefail
           deb="$(find src-tauri/target -path '*/bundle/deb/*.deb' -print -quit)"
           test -n "$deb"
-          dpkg-deb --contents "$deb" | grep -F './usr/lib/kodama-lite/tesla-bt-connect.sh'
+          dpkg-deb --contents "$deb" | grep -F 'usr/lib/kodama-lite/tesla-bt-connect.sh'
           control_dir="$(mktemp -d)"
           trap 'rm -rf "$control_dir"' EXIT
           dpkg-deb --control "$deb" "$control_dir"
