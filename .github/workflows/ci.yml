@@ -23,6 +23,8 @@ jobs:
         run: npx vitest run
       - name: Test Tesla Bluetooth handoff
         run: bash scripts/tesla-bt-connect-selftest.sh
+      - name: Test Debian OTA Bluetooth payload
+        run: node scripts/deb-package-selftest.mjs
 
   rust:
     # Kodama-Lite is Pi-only, so this keeps the Linux/arm64 build honest —
