@@ -2020,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "kodama-lite"
-version = "0.1.58"
+version = "0.1.59"
 dependencies = [
  "axum",
  "futures-lite",

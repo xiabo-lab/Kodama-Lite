@@ -5,6 +5,7 @@ import { TopBar } from "@/app/TopBar";
 import { PlayerBar } from "@/app/PlayerBar";
 import { AudioEngine } from "@/app/AudioEngine";
 import { KaraokeView } from "@/components/layout/karaoke-view";
+import { ScreenSaverHost } from "@/components/layout/screen-saver";
 import { Home } from "@/screens/Home";
 import { Explore } from "@/screens/Explore";
 import { Search } from "@/screens/Search";
@@ -104,6 +105,8 @@ export function AppShell() {
         <PlayerBar />
       </div>
       <KaraokeView />
+      {/* Above everything, but only ever shown on Home — see its docs. */}
+      <ScreenSaverHost />
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  AudioWaveformIcon,
   DatabaseIcon,
   DownloadIcon,
   InfoIcon,
@@ -28,7 +29,11 @@ import {
 import { FontSettings } from "@/components/settings/font-settings";
 import { dispatch } from "@/bus/bus";
 import { useAppStore } from "@/store/appStore";
-import { useSettingsStore, type ThemeMode } from "@/store/settingsStore";
+import {
+  SCREEN_SAVER_DELAYS_MIN,
+  useSettingsStore,
+  type ThemeMode,
+} from "@/store/settingsStore";
 import { useAuthStore } from "@/store/authStore";
 import { formatBytes, useCacheStore } from "@/store/cacheStore";
 import { clearLyricsCache, lyricsCacheStats } from "@/store/lyricsStore";
@@ -40,6 +45,13 @@ const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
 ];
+
+/** `SegmentedControl` is keyed by string, so the minutes travel as their
+ *  decimal spelling and are parsed back on the way into the store. */
+const SCREEN_SAVER_OPTIONS = SCREEN_SAVER_DELAYS_MIN.map((min) => ({
+  value: String(min),
+  label: min < 60 ? `${min} min` : `${min / 60} hr`,
+}));
 
 /**
  * Settings, ported from YTMLite's four-tab settings dialog. Kodama-Lite
@@ -288,6 +300,8 @@ function AccountSection() {
 function AppearanceSection() {
   const theme = useSettingsStore((s) => s.theme);
   const setTheme = useSettingsStore((s) => s.setTheme);
+  const saverDelay = useSettingsStore((s) => s.screenSaverDelayMin);
+  const setSaverDelay = useSettingsStore((s) => s.setScreenSaverDelayMin);
   const [fontOpen, setFontOpen] = useState(false);
   return (
     <>
@@ -323,6 +337,19 @@ function AppearanceSection() {
               <TypeIcon className="size-4" />
               Font settings
             </button>
+          }
+        />
+        <SettingRow
+          icon={AudioWaveformIcon}
+          title="Screen saver"
+          description="After this long without a touch on Home, show a sound wave that moves with the music. Never on the karaoke stage or other tabs."
+          control={
+            <SegmentedControl
+              value={String(saverDelay)}
+              onChange={(v) => setSaverDelay(Number(v))}
+              options={SCREEN_SAVER_OPTIONS}
+              ariaLabel="Screen saver delay"
+            />
           }
         />
       </Group>

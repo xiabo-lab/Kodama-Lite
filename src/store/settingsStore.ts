@@ -109,6 +109,21 @@ const DEFAULT_LYRIC_STYLE: LyricStyle = {
   bottom: { size: 35, color: "grey", bold: false },
 };
 
+/**
+ * How long Home has to sit untouched before the sound-wave screen saver
+ * comes up, in minutes. The list is the whole contract — the user picked
+ * exactly these steps, and the setter refuses anything else, so a value
+ * persisted by hand or by a future build can't leave the Settings control
+ * with no segment selected.
+ */
+export const SCREEN_SAVER_DELAYS_MIN = [1, 2, 5, 30, 60, 720, 1440] as const;
+export type ScreenSaverDelayMin = (typeof SCREEN_SAVER_DELAYS_MIN)[number];
+const DEFAULT_SCREEN_SAVER_DELAY_MIN: ScreenSaverDelayMin = 2;
+
+function isScreenSaverDelay(v: unknown): v is ScreenSaverDelayMin {
+  return SCREEN_SAVER_DELAYS_MIN.includes(v as ScreenSaverDelayMin);
+}
+
 interface SettingsState {
   /** Only light/dark — no "system": there is no desktop preference to
    *  follow on an in-car display. */
@@ -137,6 +152,10 @@ interface SettingsState {
    *  colour. Consumed as CSS custom properties in `karaoke-view.tsx` and
    *  read back by `lyrics-view.tsx`. */
   lyricStyle: LyricStyle;
+  /** Idle time on Home before the screen saver, in minutes. Only Home: the
+   *  karaoke stage and every other tab never show it. Consumed by
+   *  `screen-saver.tsx`. */
+  screenSaverDelayMin: ScreenSaverDelayMin;
   setTheme: (theme: ThemeMode) => void;
   setLyricsOffsetSec: (v: number) => void;
   setResumeOnStartup: (v: boolean) => void;
@@ -146,6 +165,7 @@ interface SettingsState {
   toggleLyricSlotBold: (slot: LyricSlot) => void;
   setKaraokeColor: (color: LyricColorName) => void;
   resetLyricStyle: () => void;
+  setScreenSaverDelayMin: (min: number) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -156,6 +176,7 @@ export const useSettingsStore = create<SettingsState>()(
       resumeOnStartup: true,
       autoRadio: true,
       lyricStyle: DEFAULT_LYRIC_STYLE,
+      screenSaverDelayMin: DEFAULT_SCREEN_SAVER_DELAY_MIN,
       setTheme: (theme) => set({ theme }),
       // Clamp to ±3.0s and snap to 0.1s so persisted values and any
       // programmatic caller stay inside the slider's contract.
@@ -202,6 +223,9 @@ export const useSettingsStore = create<SettingsState>()(
       setKaraokeColor: (karaoke) =>
         set((s) => ({ lyricStyle: { ...s.lyricStyle, karaoke } })),
       resetLyricStyle: () => set({ lyricStyle: DEFAULT_LYRIC_STYLE }),
+      setScreenSaverDelayMin: (min) => {
+        if (isScreenSaverDelay(min)) set({ screenSaverDelayMin: min });
+      },
     }),
     {
       name: "kl:settings",
@@ -217,6 +241,18 @@ export const useSettingsStore = create<SettingsState>()(
       // undefined and the stage reading `.size` off it. Rebuild it slot by
       // slot instead of trusting what was on disk.
       version: 2,
+      // `screenSaverDelayMin` needs no version bump: a key missing from
+      // disk falls back to its default through the shallow merge. A value
+      // that is present but not one of the offered steps would not, so
+      // that case is caught here rather than in `migrate`, which only runs
+      // on a version change.
+      merge: (persisted, current) => {
+        const next = { ...current, ...(persisted as Partial<SettingsState>) };
+        if (!isScreenSaverDelay(next.screenSaverDelayMin)) {
+          next.screenSaverDelayMin = DEFAULT_SCREEN_SAVER_DELAY_MIN;
+        }
+        return next;
+      },
       migrate: (persisted, version) => {
         const s = persisted as Partial<SettingsState>;
         const next = version < 1 ? { ...s, resumeOnStartup: true } : { ...s };
