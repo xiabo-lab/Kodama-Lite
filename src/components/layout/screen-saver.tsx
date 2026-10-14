@@ -1,12 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  emptyFrame,
-  fetchAndAnalyze,
-  sampleAt,
-  MAX_ANALYSIS_SECONDS,
-  type Analysis,
-} from "@/lib/screensaver/analyze";
+import { emptyFrame, sampleAt, type Analysis } from "@/lib/screensaver/analyze";
 import { idleRemainingMs, screenSaverEligible } from "@/lib/screensaver/idle";
+import { analyzeTrack, MAX_ANALYSIS_SECONDS, workerStatus } from "@/lib/screensaver/pipeline";
 import { startWaveLoop } from "@/lib/screensaver/renderer";
 import { logLine } from "@/lib/log";
 import { cn } from "@/lib/utils";
@@ -142,7 +137,7 @@ function ScreenSaver({ onWake }: { onWake: () => void }) {
 
   // Analyse whatever is current, and again on every track change while the
   // overlay is up. Until a result lands — or if it never does — the wave
-  // runs on its own idle motion, so a failure is never visible as one.
+  // is a flat line: it only ever moves in step with the music.
   const streamUrl = usePlaybackStore((s) => s.streamUrl);
   const videoId = usePlaybackStore((s) => (s.index >= 0 ? s.queue[s.index]?.videoId : undefined));
   useEffect(() => {
@@ -158,21 +153,30 @@ function ScreenSaver({ onWake }: { onWake: () => void }) {
     const duration = s.duration || s.queue[s.index]?.duration || 0;
     if (duration > MAX_ANALYSIS_SECONDS) {
       failed.add(streamUrl);
-      logLine(LOG, `${videoId}: ${Math.round(duration)}s is too long to analyse — idle wave`);
+      logLine(LOG, `${videoId}: ${Math.round(duration)}s is too long to analyse — flat line`);
       return;
     }
     const ctrl = new AbortController();
-    const t0 = performance.now();
-    fetchAndAnalyze(streamUrl, ctrl.signal).then(
-      (a) => {
-        remember(streamUrl, a);
-        analysisRef.current = a;
-        logLine(LOG, `${videoId}: analysed ${a.frames} frames in ${Math.round(performance.now() - t0)}ms`);
+    analyzeTrack(streamUrl, ctrl.signal).then(
+      (r) => {
+        remember(streamUrl, r.analysis);
+        analysisRef.current = r.analysis;
+        // Every stage, so one line from the car says which path ran and
+        // where the time went.
+        logLine(
+          LOG,
+          `${videoId}: analysed ${r.analysis.frames} frames — fetch ${r.fetchMs}ms via ${r.via}, ` +
+            `decode ${r.decodeMs}ms, analysis ${r.analyzeMs}ms on ${r.where}` +
+            (r.workerFailure ? ` (worker unavailable: ${r.workerFailure})` : ""),
+        );
       },
       (e: unknown) => {
         if ((e as Error)?.name === "AbortError") return;
         failed.add(streamUrl);
-        logLine(LOG, `${videoId}: analysis failed (${(e as Error)?.message ?? String(e)}) — idle wave`);
+        logLine(
+          LOG,
+          `${videoId}: analysis failed (${(e as Error)?.message ?? String(e)}; ${workerStatus()}) — flat line`,
+        );
       },
     );
     return () => ctrl.abort();
@@ -195,13 +199,13 @@ function ScreenSaver({ onWake }: { onWake: () => void }) {
       }
     });
 
-    const stop = startWaveLoop(
+    const loop = startWaveLoop(
       canvas,
       (now) => {
         const a = analysisRef.current;
         if (!a) return null;
         const s = usePlaybackStore.getState();
-        // Nothing audible, nothing to react to: the idle wave.
+        // Nothing audible, nothing to react to: a straight line.
         if (!s.playing || !s.started || s.muted || s.volume <= 0) return null;
         // Capped so a stalled element (buffering) can't run the picture
         // ahead of the sound indefinitely.
@@ -214,8 +218,17 @@ function ScreenSaver({ onWake }: { onWake: () => void }) {
       (level, gap) => logLine(LOG, `quality stepped down to ${level} (median frame ${gap.toFixed(1)}ms)`),
     );
     return () => {
-      stop();
+      const st = loop.stop();
       unsub();
+      // One line per screen-saver session: enough to tell from the journal
+      // whether the panel kept up, without logging anything per frame.
+      logLine(
+        LOG,
+        st.movingFrames === 0
+          ? `off after ${st.seconds}s — flat the whole time (no sound, or no analysis)`
+          : `off after ${st.seconds}s — ${st.movingFps}fps while moving, worst second ${st.worstSecondFps}fps, ` +
+              `longest gap ${st.longestGapMs}ms, quality ${st.quality}`,
+      );
     };
   }, []);
 

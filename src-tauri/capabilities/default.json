@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core permissions: invoke app commands, listen to bus events, open external links, toggle full screen from the settings menu, and the scoped outbound hosts the JS-side network/lyrics subsystem is allowed to reach.",
+  "description": "Core permissions: invoke app commands, listen to bus events, open external links, toggle full screen from the settings menu, the scoped outbound hosts the JS-side network/lyrics subsystem is allowed to reach, and the app's own loopback stream server (the screen saver reads the playing track through it when the webview's fetch of http://127.0.0.1 from tauri://localhost is refused).",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -23,7 +23,8 @@
         { "url": "https://music.163.com/*" },
         { "url": "https://apic-desktop.musixmatch.com/*" },
         { "url": "https://c.y.qq.com/*" },
-        { "url": "https://genius.com/*" }
+        { "url": "https://genius.com/*" },
+        { "url": "http://127.0.0.1:*/*" }
       ]
     }
   ]

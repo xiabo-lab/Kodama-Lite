@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyzeBuffer, bandBins, BANDS, emptyFrame, sampleAt, type Analysis } from "./analyze";
+import { analyzeBuffer, bandBins, BANDS, emptyFrame, FFT_SIZE, sampleAt, type Analysis } from "./analyze";
 import { fft } from "./fft";
 
 const RATE = 11025;
@@ -48,7 +48,7 @@ describe("bandBins", () => {
         const [lo, hi] = bins[b];
         expect(hi).toBeGreaterThan(lo);
         expect(lo).toBeGreaterThanOrEqual(1);
-        expect(hi).toBeLessThanOrEqual(512);
+        expect(hi).toBeLessThanOrEqual(FFT_SIZE / 2);
         if (b > 0) expect(lo).toBe(bins[b - 1][1]);
       }
     });
@@ -109,9 +109,36 @@ describe("analyzeBuffer", () => {
     expect(a.bands[Math.round(0.5 * a.fps) * BANDS + 1]).toBeGreaterThan(0.9);
   });
 
+  it("in main-thread mode, yields to the event loop while it works", async () => {
+    // A timer queued before the analysis must get to run before it ends —
+    // the property that keeps the wave drawing while a track is analysed
+    // on a platform with no worker.
+    let ranDuring = false;
+    let finished = false;
+    setTimeout(() => {
+      ranDuring = !finished;
+    }, 0);
+    await analyzeBuffer([gatedTone(100, 60)], RATE, { sliceMs: 1 });
+    finished = true;
+    expect(ranDuring).toBe(true);
+  });
+
+  it("in worker mode, never yields", async () => {
+    let ranDuring = false;
+    let finished = false;
+    setTimeout(() => {
+      ranDuring = !finished;
+    }, 0);
+    const run = analyzeBuffer([gatedTone(100, 10)], RATE);
+    await run;
+    finished = true;
+    // The promise settles in a microtask, before any timer.
+    expect(ranDuring).toBe(false);
+  });
+
   it("stops when aborted", async () => {
     const ctrl = new AbortController();
-    const run = analyzeBuffer([gatedTone(100, 30)], RATE, ctrl.signal);
+    const run = analyzeBuffer([gatedTone(100, 30)], RATE, { signal: ctrl.signal, sliceMs: 1 });
     ctrl.abort();
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
   });

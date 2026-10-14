@@ -5,72 +5,47 @@ import type { AnalysisFrame } from "./analyze";
  *
  * Shape: a fan of thin lines through one horizontal axis. Each line is the
  * same wave at a different amplitude and a slightly different phase, which
- * is what reads as a twisted glowing ribbon rather than a single curve.
- * The wave's height along the axis is a sum of Gaussian "packets", one or
- * two per frequency band — bass in the middle, treble towards the edges —
- * so the music visibly pushes different parts of the screen.
+ * reads as a twisted ribbon rather than a single curve. The wave's height
+ * along the axis is a sum of Gaussian "packets", one or two per frequency
+ * band — bass in the middle, treble towards the edges.
  *
- * Built for the Pi's WebKitGTK as much as for a desktop browser:
+ * **Every movement comes from the music.** With no sound — paused, muted,
+ * between songs, a silent intro, or before the track has been analysed —
+ * it settles to a still, straight line. The first version also drifted,
+ * breathed and wobbled on its own clock, and that motion buried the beat:
+ * on the car's panel it was hard to see that the wave was following the
+ * song at all. So nothing here moves unless a band, the loudness or an
+ * onset says so: lobe heights follow their band with a fast attack and a
+ * short release, onsets kick the whole wave, and the wave only travels
+ * sideways in proportion to loudness.
  *
- *   - No `shadowBlur`. It is the obvious way to get glow and the most
- *     expensive thing a 2D canvas can be asked to do per frame. Glow comes
- *     from a few pre-rendered radial sprites added on top instead.
+ * **Dim greys on black, constant brightness.** Colour and beat-flashes were
+ * a distraction in a moving car. The brightest line is ~57% grey.
+ *
+ * Built for the Pi's WebKitGTK:
+ *
  *   - Lines are exactly 1 device pixel: Skia's hairline fast path. Measured
- *     in Chrome, 1.15px cost 9x more on the GPU and 2.5x more on the CPU
- *     for the same lines, because anything wider goes through the general
- *     stroker and a full path fill per line.
- *   - Lines are opaque and drawn `source-over`, dimmed by colour rather
- *     than alpha. A hairline is drawn segment by segment, and adjacent
- *     segments share their end pixel — with any translucency or additive
- *     blending that pixel is painted twice, which showed as a bright tick at
- *     every vertex. Opaque paint over itself is invisible.
- *   - The dimming lives in a small pool of pre-built gradients (brightness
- *     level × tier), and a frame switches between at most three of them:
- *     on Skia's CPU path every `strokeStyle` change rebuilds the shader,
- *     and one gradient per line measured ~7x slower.
- *   - Per line, per point, the cost is two multiplies and an add. Every
- *     trig call is hoisted into per-point sums shared by all lines (see
- *     `render`), so the line count is nearly free.
- *   - `startWaveLoop` steps quality down if the frame rate sags, ending at
- *     three-quarter resolution and 30fps rather than at a stutter.
+ *     in Chrome, 1.15px cost 9x more on the GPU and 2.5x more on the CPU.
+ *   - Lines are opaque and drawn `source-over`, dimmed by colour, never by
+ *     alpha: a hairline is drawn segment by segment, and with translucency
+ *     the shared end pixel of each segment is painted twice — a bright tick
+ *     at every vertex.
+ *   - Nothing but a fill, ≤20 hairlines and a 1px rect per frame. v0.1.59
+ *     also blitted a full-screen background image and up to nine large
+ *     scaled glow sprites with additive blending every frame — millions of
+ *     blended pixels for a CPU-rasterised canvas.
+ *   - No allocation per frame, so no garbage-collection hitches.
+ *   - 30fps, and no drawing at all while the line is flat and still.
+ *   - `startWaveLoop` steps quality down if frames still come too slowly.
  */
 
-/** The reference image's palette, left to right. */
-const STOPS: Array<[number, [number, number, number]]> = [
-  [0.0, [255, 59, 78]],
-  [0.12, [122, 92, 255]],
-  [0.3, [184, 77, 255]],
-  [0.45, [77, 125, 255]],
-  [0.55, [58, 160, 255]],
-  [0.65, [163, 92, 255]],
-  [0.78, [255, 92, 176]],
-  [0.9, [192, 96, 255]],
-  [1.0, [63, 230, 255]],
-];
+const BACKGROUND = "#000";
+/** Inner (low, dim) to outer (tall, brightest) line tiers. */
+const TIER_COLORS = ["rgb(62, 62, 64)", "rgb(98, 98, 101)", "rgb(146, 146, 150)"];
+const AXIS_COLOR = "rgb(92, 92, 95)";
 
-const BACKGROUND = "#03040b";
-
-/** Lines are split into tiers, inner (low, dim) to outer (tall, bright),
- *  each with its own pre-dimmed gradient. */
-const TIERS = [0.5, 0.75, 1.0];
-/** Pre-built overall brightness steps, so the beat can brighten the lines
- *  without per-frame gradient construction. Fine enough that a step is
- *  not visible through the smoothing. */
-const BRIGHT_LEVELS = 10;
-const BRIGHT_MIN = 0.7;
-const BRIGHT_MAX = 1.15;
-
-function colorAt(t: number): [number, number, number] {
-  for (let i = 1; i < STOPS.length; i++) {
-    const [p1, c1] = STOPS[i];
-    if (t <= p1) {
-      const [p0, c0] = STOPS[i - 1];
-      const w = (t - p0) / (p1 - p0 || 1);
-      return [0, 1, 2].map((k) => Math.round(c0[k] + (c1[k] - c0[k]) * w)) as [number, number, number];
-    }
-  }
-  return STOPS[STOPS.length - 1][1];
-}
+const TARGET_FPS = 30;
+const FRAME_MS = 1000 / TARGET_FPS;
 
 interface Packet {
   /** Centre, as a fraction of the width. */
@@ -81,24 +56,22 @@ interface Packet {
   band: number;
   /** Carrier wavelength, as a fraction of the width — tighter for treble. */
   lambda: number;
-  /** Resting height when nothing is playing, as a fraction of max. */
-  idle: number;
   /** How hard its band can push it. */
   gain: number;
 }
 
-/** Laid out after the reference: the tallest lobes just left of centre,
- *  smaller ones trailing off towards both edges. */
+/** The tallest lobes just left of centre (bass), smaller ones trailing off
+ *  towards both edges (treble). */
 const PACKETS: Packet[] = [
-  { x: 0.08, sigma: 0.04, band: 7, lambda: 0.11, idle: 0.1, gain: 0.55 },
-  { x: 0.19, sigma: 0.05, band: 5, lambda: 0.13, idle: 0.16, gain: 0.7 },
-  { x: 0.29, sigma: 0.055, band: 3, lambda: 0.15, idle: 0.22, gain: 0.8 },
-  { x: 0.39, sigma: 0.06, band: 1, lambda: 0.18, idle: 0.42, gain: 1.0 },
-  { x: 0.48, sigma: 0.065, band: 0, lambda: 0.2, idle: 0.32, gain: 1.0 },
-  { x: 0.58, sigma: 0.06, band: 2, lambda: 0.17, idle: 0.34, gain: 0.9 },
-  { x: 0.68, sigma: 0.055, band: 4, lambda: 0.15, idle: 0.24, gain: 0.8 },
-  { x: 0.78, sigma: 0.05, band: 6, lambda: 0.13, idle: 0.22, gain: 0.7 },
-  { x: 0.9, sigma: 0.04, band: 7, lambda: 0.11, idle: 0.12, gain: 0.55 },
+  { x: 0.08, sigma: 0.04, band: 7, lambda: 0.11, gain: 0.55 },
+  { x: 0.19, sigma: 0.05, band: 5, lambda: 0.13, gain: 0.7 },
+  { x: 0.29, sigma: 0.055, band: 3, lambda: 0.15, gain: 0.8 },
+  { x: 0.39, sigma: 0.06, band: 1, lambda: 0.18, gain: 1.0 },
+  { x: 0.48, sigma: 0.065, band: 0, lambda: 0.2, gain: 1.0 },
+  { x: 0.58, sigma: 0.06, band: 2, lambda: 0.17, gain: 0.9 },
+  { x: 0.68, sigma: 0.055, band: 4, lambda: 0.15, gain: 0.8 },
+  { x: 0.78, sigma: 0.05, band: 6, lambda: 0.13, gain: 0.7 },
+  { x: 0.9, sigma: 0.04, band: 7, lambda: 0.11, gain: 0.55 },
 ];
 
 interface Quality {
@@ -107,16 +80,17 @@ interface Quality {
   step: number;
   /** Backing-store resolution relative to the CSS size. */
   scale: number;
-  /** Draw every Nth animation frame. */
-  every: number;
 }
 
 const QUALITY: Quality[] = [
-  { lines: 28, step: 8, scale: 1, every: 1 },
-  { lines: 20, step: 10, scale: 1, every: 1 },
-  { lines: 14, step: 12, scale: 1, every: 1 },
-  { lines: 12, step: 12, scale: 0.75, every: 2 },
+  { lines: 20, step: 10, scale: 1 },
+  { lines: 16, step: 12, scale: 1 },
+  { lines: 12, step: 14, scale: 0.75 },
+  { lines: 10, step: 16, scale: 0.5 },
 ];
+
+/** Below this every lobe is under a pixel: the wave is a straight line. */
+const FLAT = 0.002;
 
 /** Exponential approach with a time constant, frame-rate independent. */
 function approach(current: number, target: number, dt: number, tau: number): number {
@@ -129,31 +103,28 @@ export class WaveRenderer {
   private height = 0;
   private dpr = 1;
   private quality = 0;
-  private background: HTMLCanvasElement | null = null;
-  /** `[brightnessLevel][tier]` — see BRIGHT_LEVELS and TIERS. */
-  private strokes: CanvasGradient[][] = [];
-  /** Full-brightness gradient, for the axis. */
-  private axis: CanvasGradient | null = null;
-  private sprites: HTMLCanvasElement[] = [];
 
   // Smoothed state, carried between frames.
   private heights = new Float32Array(PACKETS.length);
   private level = 0;
   private kick = 0;
-  /** 0 = idle breathing, 1 = fully driven by the analysis. */
-  private reactive = 0;
   private phase = 0;
   private lastT = -1;
+  private flat = false;
 
-  // Per-frame scratch, sized on resize.
+  // Scratch, sized on resize. Per point: the packets' summed sin and cos
+  // terms, and the point's x as a fraction of the width.
   private sumSin = new Float32Array(0);
   private sumCos = new Float32Array(0);
+  private xf = new Float32Array(0);
+  /** Per line: amplitude × cos/sin of its phase offset. Fixed per quality. */
+  private lineCos = new Float32Array(0);
+  private lineSin = new Float32Array(0);
 
   constructor(private canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("2D canvas unavailable");
     this.ctx = ctx;
-    this.heights.set(PACKETS.map((p) => p.idle));
     this.resize();
   }
 
@@ -161,8 +132,10 @@ export class WaveRenderer {
     return this.quality;
   }
 
-  get frameDivisor(): number {
-    return QUALITY[this.quality].every;
+  /** True when the wave is a straight line and nothing is driving it, so
+   *  another frame would draw exactly the same pixels. */
+  get settled(): boolean {
+    return this.flat;
   }
 
   /** Step down one quality level. Returns false at the floor. */
@@ -182,73 +155,38 @@ export class WaveRenderer {
     this.height = Math.max(1, Math.round(cssH * this.dpr));
     this.canvas.width = this.width;
     this.canvas.height = this.height;
+
     const points = Math.ceil(cssW / q.step) + 1;
     this.sumSin = new Float32Array(points);
     this.sumCos = new Float32Array(points);
-    this.buildStatics();
-  }
+    this.xf = new Float32Array(points);
+    for (let i = 0; i < points; i++) this.xf[i] = Math.min(1, (i * q.step) / cssW);
 
-  private buildStatics(): void {
-    const { width: W, height: H } = this;
-
-    // Background: near-black with a faint blue haze along the axis, drawn
-    // once and blitted every frame.
-    const bg = document.createElement("canvas");
-    bg.width = W;
-    bg.height = H;
-    const b = bg.getContext("2d")!;
-    b.fillStyle = BACKGROUND;
-    b.fillRect(0, 0, W, H);
-    b.save();
-    b.translate(W / 2, H / 2);
-    b.scale(1, (H / W) * 1.6);
-    const haze = b.createRadialGradient(0, 0, 0, 0, 0, W * 0.55);
-    haze.addColorStop(0, "rgba(46, 70, 190, 0.22)");
-    haze.addColorStop(0.5, "rgba(40, 50, 140, 0.08)");
-    haze.addColorStop(1, "rgba(0, 0, 0, 0)");
-    b.fillStyle = haze;
-    b.fillRect(-W, -W, W * 2, W * 2);
-    b.restore();
-    this.background = bg;
-
-    const gradient = (k: number) => {
-      const g = this.ctx.createLinearGradient(0, 0, W, 0);
-      for (const [p, rgb] of STOPS) {
-        const [r, gg, bb] = rgb.map((v) => Math.min(255, Math.round(v * k)));
-        g.addColorStop(p, `rgb(${r}, ${gg}, ${bb})`);
-      }
-      return g;
-    };
-    this.strokes = Array.from({ length: BRIGHT_LEVELS }, (_, level) => {
-      const b = BRIGHT_MIN + ((BRIGHT_MAX - BRIGHT_MIN) * level) / (BRIGHT_LEVELS - 1);
-      return TIERS.map((tier) => gradient(b * tier));
-    });
-    this.axis = gradient(1);
-
-    // One soft bloom per packet, tinted with the palette at its position.
-    this.sprites = PACKETS.map((p) => {
-      const [r, gg, bb] = colorAt(p.x);
-      const s = document.createElement("canvas");
-      s.width = s.height = 128;
-      const c = s.getContext("2d")!;
-      const rg = c.createRadialGradient(64, 64, 0, 64, 64, 64);
-      rg.addColorStop(0, `rgba(${r}, ${gg}, ${bb}, 0.55)`);
-      rg.addColorStop(0.4, `rgba(${r}, ${gg}, ${bb}, 0.18)`);
-      rg.addColorStop(1, `rgba(${r}, ${gg}, ${bb}, 0)`);
-      c.fillStyle = rg;
-      c.fillRect(0, 0, 128, 128);
-      return s;
-    });
+    this.lineCos = new Float32Array(q.lines);
+    this.lineSin = new Float32Array(q.lines);
+    for (let l = 0; l < q.lines; l++) {
+      const u = q.lines > 1 ? l / (q.lines - 1) : 1;
+      const amp = 0.12 + 0.88 * u ** 0.8;
+      const delta = (u - 0.5) * 1.1;
+      this.lineCos[l] = Math.cos(delta) * amp;
+      this.lineSin[l] = Math.sin(delta) * amp;
+    }
+    // A resize clears the canvas; make sure the next frame repaints it.
+    this.flat = false;
   }
 
   /**
    * Draw one frame. `frame` is the analysis at the moment being heard, or
-   * null for "nothing to react to" — paused, muted, not analysed yet — in
-   * which case the wave eases into its slow idle breathing.
+   * null for "no sound" — the wave then eases down to a straight line.
    */
   render(nowMs: number, frame: AnalysisFrame | null): void {
     const t = nowMs / 1000;
-    const dt = this.lastT < 0 ? 1 / 60 : Math.min(0.1, Math.max(0, t - this.lastT));
+    // Real elapsed time, capped only against absurd jumps (a hidden tab).
+    // v0.1.59 capped it at 0.1s, so whenever frames came slower than 10 a
+    // second the whole animation ran in slow motion — on top of the lag,
+    // the wave then fell visibly behind the music. The smoothing below is
+    // exponential and stable for any step, so there is no need to cap it.
+    const dt = this.lastT < 0 ? FRAME_MS / 1000 : Math.min(0.5, Math.max(0, t - this.lastT));
     this.lastT = t;
 
     const q = QUALITY[this.quality];
@@ -256,29 +194,27 @@ export class WaveRenderer {
     const cy = H / 2;
     const maxAmp = H * 0.47;
 
-    // ── Smoothed drive ─────────────────────────────────────────────────
-    this.reactive = approach(this.reactive, frame ? 1 : 0, dt, 0.8);
-    const r = this.reactive;
-    this.level = approach(this.level, frame ? frame.level : 0, dt, 0.25);
-    this.kick = Math.max(this.kick * Math.exp(-dt / 0.18), frame ? frame.onset : 0);
-    const kick = this.kick * r;
-
+    // ── Drive ──────────────────────────────────────────────────────────
+    this.level = approach(this.level, frame ? frame.level : 0, dt, 0.12);
+    this.kick = Math.max(this.kick * Math.exp(-dt / 0.12), frame ? frame.onset : 0);
+    let tallest = 0;
     for (let k = 0; k < PACKETS.length; k++) {
       const p = PACKETS[k];
-      // Idle: each packet breathes on an 8s cycle, out of step with its
-      // neighbours so the wave rolls rather than pulses.
-      const idle = p.idle * (0.75 + 0.25 * Math.sin((2 * Math.PI * t) / 8 + k * 0.9));
-      const band = frame ? frame.bands[p.band] : 0;
-      const driven = 0.12 + 1.15 * band ** 1.2 * p.gain;
-      const target = (1 - r) * idle + r * driven;
-      // Fast attack, slow release: hits land, decays glide.
-      const tau = target > this.heights[k] ? 0.05 : 0.3;
+      const target = frame ? Math.min(1.3, frame.bands[p.band] ** 1.3 * p.gain) : 0;
+      // Fast attack so a hit lands on the beat; a short release so the
+      // lobe is down again before the next one. A little slower when the
+      // sound stops altogether, so pausing settles (flat in ~1.6s) rather
+      // than snaps.
+      const tau = target > this.heights[k] ? 0.03 : frame ? 0.14 : 0.25;
       this.heights[k] = approach(this.heights[k], target, dt, tau);
+      if (this.heights[k] > tallest) tallest = this.heights[k];
     }
-
-    this.phase += dt * (0.35 + r * (0.5 + 1.6 * this.level));
-    const bright = Math.min(BRIGHT_MAX, 0.72 + r * (0.25 * this.level + 0.35 * kick) + (1 - r) * 0.1);
-    const boost = 1 + 0.3 * kick;
+    // Sideways travel only while there is sound, and only as fast as it is
+    // loud. Silence stands still.
+    this.phase += dt * 2.6 * this.level;
+    const boost = 1 + 0.5 * this.kick;
+    const wasFlat = this.flat;
+    this.flat = !frame && tallest * boost < FLAT;
 
     // ── Per-point sums, shared by every line ──────────────────────────
     //
@@ -287,166 +223,190 @@ export class WaveRenderer {
     // so the two sums are computed once per point and each line is a
     // linear combination of them.
     const points = this.sumSin.length;
-    const stepPx = q.step * dpr;
-    const centres = PACKETS.map((p, k) => p.x + 0.015 * Math.sin(t * 0.07 + k * 1.7));
-    for (let i = 0; i < points; i++) {
-      const xf = Math.min(1, (i * stepPx) / W);
-      let s = 0;
-      let c = 0;
-      for (let k = 0; k < PACKETS.length; k++) {
-        const p = PACKETS[k];
-        const d = (xf - centres[k]) / p.sigma;
-        if (d > 3.2 || d < -3.2) continue;
-        const env = this.heights[k] * Math.exp(-d * d);
-        const a = (2 * Math.PI * (xf - centres[k])) / p.lambda - this.phase * (k % 2 ? 1 : -0.8) + k * 0.6;
-        s += env * Math.sin(a);
-        c += env * Math.cos(a);
+    if (!this.flat) {
+      for (let i = 0; i < points; i++) {
+        const xf = this.xf[i];
+        let s = 0;
+        let c = 0;
+        for (let k = 0; k < PACKETS.length; k++) {
+          const p = PACKETS[k];
+          const d = (xf - p.x) / p.sigma;
+          if (d > 3.2 || d < -3.2) continue;
+          const env = this.heights[k] * Math.exp(-d * d);
+          if (env < 1e-4) continue;
+          const a = (2 * Math.PI * (xf - p.x)) / p.lambda - this.phase * (k % 2 ? 1 : -0.8) + k * 0.6;
+          s += env * Math.sin(a);
+          c += env * Math.cos(a);
+        }
+        // Kick boost first, then a soft limit to 1, so stacked packets and
+        // a hard hit approach the panel's edge but never cross it.
+        s *= boost;
+        c *= boost;
+        const m = Math.hypot(s, c);
+        if (m > 0.0001) {
+          const lim = Math.tanh(m) / m;
+          s *= lim;
+          c *= lim;
+        }
+        // Taper to nothing at both edges.
+        const edge = Math.min(1, xf / 0.03, (1 - xf) / 0.03);
+        this.sumSin[i] = s * edge * maxAmp;
+        this.sumCos[i] = c * edge * maxAmp;
       }
-      // Soft limit to 1, applied after the kick boost, so stacked packets
-      // and a hard hit can approach the panel's edge but never cross it.
-      s *= boost;
-      c *= boost;
-      const m = Math.hypot(s, c);
-      if (m > 0.0001) {
-        const lim = Math.tanh(m) / m;
-        s *= lim;
-        c *= lim;
-      }
-      // Taper to nothing at both edges.
-      const edge = Math.min(1, xf / 0.03, (1 - xf) / 0.03);
-      this.sumSin[i] = s * edge * maxAmp;
-      this.sumCos[i] = c * edge * maxAmp;
     }
 
     // ── Draw ──────────────────────────────────────────────────────────
-    ctx.globalCompositeOperation = "source-over";
-    ctx.globalAlpha = 1;
-    if (this.background) ctx.drawImage(this.background, 0, 0);
+    if (this.flat && wasFlat) return; // identical to what is on screen
+    ctx.fillStyle = BACKGROUND;
+    ctx.fillRect(0, 0, W, H);
 
-    // Lines first, inner (dim) to outer (bright) so the brightest are on
-    // top. Opaque — see the header for why that matters.
-    const level = Math.round(
-      Math.min(1, Math.max(0, (bright - BRIGHT_MIN) / (BRIGHT_MAX - BRIGHT_MIN))) *
-        (BRIGHT_LEVELS - 1),
-    );
-    const palette = this.strokes[level];
-    ctx.lineWidth = 1;
-    const lines = q.lines;
-    let tier = -1;
-    for (let l = 0; l < lines; l++) {
-      const u = lines > 1 ? l / (lines - 1) : 1;
-      const amp = 0.12 + 0.88 * u ** 0.8;
-      const delta = (u - 0.5) * 1.1 + 0.22 * Math.sin(t * 0.5 + l * 0.37);
-      const cd = Math.cos(delta) * amp;
-      const sd = Math.sin(delta) * amp;
-      const want = Math.min(TIERS.length - 1, Math.floor(u * TIERS.length));
-      if (want !== tier) {
-        tier = want;
-        ctx.strokeStyle = palette[tier];
+    if (!this.flat) {
+      ctx.lineWidth = 1;
+      const lines = q.lines;
+      const stepPx = q.step * dpr;
+      let tier = -1;
+      for (let l = 0; l < lines; l++) {
+        const want = Math.min(TIER_COLORS.length - 1, Math.floor((l / lines) * TIER_COLORS.length));
+        if (want !== tier) {
+          tier = want;
+          ctx.strokeStyle = TIER_COLORS[tier];
+        }
+        const cd = this.lineCos[l];
+        const sd = this.lineSin[l];
+        ctx.beginPath();
+        ctx.moveTo(0, cy + cd * this.sumSin[0] + sd * this.sumCos[0]);
+        for (let i = 1; i < points; i++) {
+          ctx.lineTo(i * stepPx, cy + cd * this.sumSin[i] + sd * this.sumCos[i]);
+        }
+        ctx.stroke();
       }
-      ctx.beginPath();
-      ctx.moveTo(0, cy + cd * this.sumSin[0] + sd * this.sumCos[0]);
-      for (let i = 1; i < points; i++) {
-        ctx.lineTo(i * stepPx, cy + cd * this.sumSin[i] + sd * this.sumCos[i]);
-      }
-      ctx.stroke();
     }
 
-    // Glow, added over the lines: a bloom behind each lobe, scaled with
-    // its height, then the axis as stacked rectangles — the cheapest thing
-    // a canvas draws. Three soft bands, then a bright core.
-    ctx.globalCompositeOperation = "lighter";
-    for (let k = 0; k < PACKETS.length; k++) {
-      const h = this.heights[k] * boost;
-      const a = Math.min(1, h * 1.3) * bright * 0.8;
-      if (a < 0.02) continue;
-      const w = PACKETS[k].sigma * W * 5;
-      const hh = Math.max(H * 0.25, h * maxAmp * 2.6);
-      ctx.globalAlpha = Math.min(1, a);
-      ctx.drawImage(this.sprites[k], centres[k] * W - w / 2, cy - hh / 2, w, hh);
-    }
-
-    ctx.fillStyle = this.axis!;
-    for (const [half, alpha] of [
-      [6, 0.05],
-      [3, 0.09],
-      [1.5, 0.14],
-    ]) {
-      ctx.globalAlpha = alpha * bright;
-      ctx.fillRect(0, cy - half * dpr, W, 2 * half * dpr);
-    }
-    ctx.globalAlpha = Math.min(1, 0.85 * bright);
-    ctx.fillRect(0, cy - 0.75 * dpr, W, Math.max(1, 1.5 * dpr));
-
-    ctx.globalCompositeOperation = "source-over";
-    ctx.globalAlpha = 1;
+    // The axis, always there: it is what the wave settles back into.
+    ctx.fillStyle = AXIS_COLOR;
+    ctx.fillRect(0, Math.round(cy - 0.5 * dpr), W, Math.max(1, Math.round(dpr)));
   }
 }
 
-/** Median rAF gap above which a window counts as slow: ~45fps. */
-const SLOW_GAP_MS = 22;
+/** What a run of the loop looked like, for the journal. */
+export interface WaveStats {
+  seconds: number;
+  /** Frames drawn while the wave was moving. 0 = flat the whole time. */
+  movingFrames: number;
+  /** Frames drawn per second while the wave was moving. */
+  movingFps: number;
+  /** The worst whole second while moving. */
+  worstSecondFps: number;
+  /** Longest gap between two moving frames — a single hitch shows here. */
+  longestGapMs: number;
+  quality: number;
+}
+
+/** Median frame gap above which a window counts as slow: 20fps. */
+const SLOW_GAP_MS = 50;
 const WINDOW_MS = 3000;
 
 /**
- * Run a `WaveRenderer` on `canvas` until the returned function is called.
- * `getFrame` is asked for the analysis frame on every drawn frame.
+ * Run a `WaveRenderer` on `canvas` until `stop()` is called; `stop()`
+ * returns what the run looked like. `getFrame` is asked for the analysis
+ * frame at most 30 times a second.
  *
- * Watches its own frame rate and steps quality down when the *median*
- * frame gap stays over ~22ms (under ~45fps) for two 3-second windows in a
- * row. The median, not the mean, on purpose: the track analysis runs on
- * this same thread in slices, and a garbage collection or a screenshot
- * stalls a few frames — a mean counted those and degraded a renderer that
- * was keeping up fine, permanently. A renderer that is genuinely too
- * expensive is slow on most frames, which is what a median sees. Gaps
- * over 250ms (a hidden tab) are ignored outright. `onDegrade` hears about
- * each step, with the median gap that caused it.
+ * Steps quality down when the *median* gap between drawn frames stays over
+ * 50ms (under 20fps) for two 3-second windows in a row. The median, so a
+ * one-off stall (a garbage collection, a screenshot) cannot permanently
+ * degrade a renderer that is keeping up. Gaps over 250ms (a hidden tab)
+ * are ignored outright, as are the periods when the line is flat and
+ * nothing is drawn at all.
  */
 export function startWaveLoop(
   canvas: HTMLCanvasElement,
   getFrame: (nowMs: number) => AnalysisFrame | null,
   onDegrade?: (level: number, medianGapMs: number) => void,
-): () => void {
+): { stop: () => WaveStats } {
   const renderer = new WaveRenderer(canvas);
+  const started = performance.now();
   let raf = 0;
-  let tick = 0;
-  let last = -1;
+  let lastDraw = -1;
+  let lastMoving = -1;
+
+  // Governor window.
   let windowStart = -1;
   let gaps: number[] = [];
   let slowWindows = 0;
-  const started = performance.now();
+
+  // Stats.
+  let movingFrames = 0;
+  let movingMs = 0;
+  let longestGap = 0;
+  let secondStart = -1;
+  let secondFrames = 0;
+  let worstSecond = Infinity;
 
   const ro = new ResizeObserver(() => renderer.resize());
   ro.observe(canvas);
 
   const loop = (now: number) => {
     raf = requestAnimationFrame(loop);
-    tick++;
-    if (last >= 0) {
-      const gap = now - last;
-      if (gap < 250 && now - started > 2000) {
-        if (windowStart < 0) windowStart = now;
-        gaps.push(gap);
-        if (now - windowStart > WINDOW_MS) {
-          gaps.sort((a, b) => a - b);
-          const median = gaps[gaps.length >> 1];
-          slowWindows = median > SLOW_GAP_MS ? slowWindows + 1 : 0;
-          if (slowWindows >= 2) {
-            if (renderer.degrade()) onDegrade?.(renderer.qualityLevel, median);
-            slowWindows = 0;
-          }
-          windowStart = -1;
-          gaps = [];
+    // 30fps: on a 60Hz panel this draws every other vsync. The slack keeps
+    // vsync jitter from skipping a frame we meant to draw.
+    if (lastDraw >= 0 && now - lastDraw < FRAME_MS - 4) return;
+    const frame = getFrame(now);
+    if (frame === null && renderer.settled) {
+      lastMoving = -1; // a pause is not a slow frame
+      return;
+    }
+    lastDraw = now;
+    renderer.render(now, frame);
+
+    if (lastMoving >= 0) {
+      const gap = now - lastMoving;
+      if (gap < 250) {
+        movingFrames++;
+        movingMs += gap;
+        if (gap > longestGap) longestGap = gap;
+        if (secondStart < 0) secondStart = now;
+        secondFrames++;
+        if (now - secondStart >= 1000) {
+          worstSecond = Math.min(worstSecond, (1000 * secondFrames) / (now - secondStart));
+          secondStart = now;
+          secondFrames = 0;
         }
+        if (now - started > 2000) {
+          if (windowStart < 0) windowStart = now;
+          gaps.push(gap);
+          if (now - windowStart > WINDOW_MS) {
+            gaps.sort((a, b) => a - b);
+            const median = gaps[gaps.length >> 1];
+            slowWindows = median > SLOW_GAP_MS ? slowWindows + 1 : 0;
+            if (slowWindows >= 2) {
+              if (renderer.degrade()) onDegrade?.(renderer.qualityLevel, median);
+              slowWindows = 0;
+            }
+            windowStart = -1;
+            gaps = [];
+          }
+        }
+      } else {
+        secondStart = -1;
+        secondFrames = 0;
       }
     }
-    last = now;
-    if (tick % renderer.frameDivisor !== 0) return;
-    renderer.render(now, getFrame(now));
+    lastMoving = now;
   };
   raf = requestAnimationFrame(loop);
 
-  return () => {
-    cancelAnimationFrame(raf);
-    ro.disconnect();
+  return {
+    stop: () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      return {
+        seconds: Math.round((performance.now() - started) / 1000),
+        movingFrames,
+        movingFps: movingMs > 0 ? Math.round((1000 * movingFrames) / movingMs) : 0,
+        worstSecondFps: Number.isFinite(worstSecond) ? Math.round(worstSecond) : 0,
+        longestGapMs: Math.round(longestGap),
+        quality: renderer.qualityLevel,
+      };
+    },
   };
 }

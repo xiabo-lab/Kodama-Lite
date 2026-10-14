@@ -2,7 +2,6 @@
 // /docs/screensaver-preview.html; not part of the app build.
 import {
   analyzeBuffer,
-  analyzeEncoded,
   emptyFrame,
   sampleAt,
   BANDS,
@@ -216,7 +215,7 @@ async function ensureDemo(): Promise<void> {
   const t1 = performance.now();
   const low = await resample(demoBuffer, 11025);
   const t2 = performance.now();
-  demoAnalysis = await analyzeBuffer([low.getChannelData(0), low.getChannelData(1)], low.sampleRate);
+  demoAnalysis = await analyzeBuffer([low.getChannelData(0), low.getChannelData(1)], low.sampleRate, { sliceMs: 5 });
   const t3 = performance.now();
   timing = { render: t1 - t0, resample: t2 - t1, analyze: t3 - t2, frames: demoAnalysis.frames };
   setStatus(`Demo analyzed: ${demoAnalysis.frames} frames in ${Math.round(t3 - t2)} ms.`);
@@ -259,7 +258,10 @@ $<HTMLInputElement>("file").addEventListener("change", async (e) => {
   setStatus(`Decoding and analyzing “${file.name}”…`);
   try {
     const t0 = performance.now();
-    analysis = await analyzeEncoded(await file.arrayBuffer());
+    // Same decode the app does: resample to 11025Hz while decoding.
+    const decoded = await new OfflineAudioContext(1, 1, 11025).decodeAudioData(await file.arrayBuffer());
+    const chans = Array.from({ length: Math.min(2, decoded.numberOfChannels) }, (_, c) => decoded.getChannelData(c));
+    analysis = await analyzeBuffer(chans, decoded.sampleRate, { sliceMs: 5 });
     const ms = Math.round(performance.now() - t0);
     audio.src = URL.createObjectURL(file);
     await audio.play();

@@ -1,7 +1,8 @@
 import { fft } from "./fft";
 
 /**
- * Offline band analysis for the screen saver's sound wave.
+ * Offline band analysis for the screen saver's sound wave — the pure part,
+ * safe to run in a Web Worker, in tests, or on the main thread.
  *
  * **Why offline, and not an `AnalyserNode` on the playing element.** The
  * live route is `createMediaElementSource(el)`, and that moves the app's
@@ -12,25 +13,25 @@ import { fft } from "./fft";
  * for a visual is not a trade worth making in a car, where a volume
  * mistake is full volume.
  *
- * So the wave reads a second copy instead. The stream server only answers
- * once a download is complete, which means that by the time anything is
- * audible the whole file is on disk and a `fetch` of the same URL is a
- * local read. It is decoded at a low sample rate (bands above ~5kHz add
- * nothing a viewer can see), reduced to a few floats per frame, and the
- * PCM is dropped. Playback is never touched.
+ * So the wave reads a second copy instead (see `pipeline.ts` for fetching
+ * and decoding it), reduced here to a few floats per frame.
  */
 
 export const BANDS = 8;
 export const FPS = 30;
-const FFT_SIZE = 1024;
+/**
+ * 512 at 11025Hz is a 46ms window: half the cost of 1024, and twice the
+ * time resolution, which is the part that matters — a kick drum is a
+ * ~50ms event, and a 93ms window smeared it across three frames, which is
+ * a large part of why the first version's wave looked loosely attached to
+ * the beat. 21.5Hz bins are still fine enough for the lowest band.
+ */
+export const FFT_SIZE = 512;
 const MIN_HZ = 40;
 const MAX_HZ = 5000;
 /** Band energies below this (dB of FFT power) are treated as silence, so a
  *  fade-out's dither floor cannot be normalised up into a full-height wave. */
 const SILENCE_DB = -40;
-/** How many frames to analyse between yields to the event loop — the wave
- *  keeps animating on its procedural motion while this runs. */
-const FRAMES_PER_SLICE = 240;
 
 export interface Analysis {
   fps: number;
@@ -54,7 +55,7 @@ export function emptyFrame(): AnalysisFrame {
   return { bands: new Float32Array(BANDS), level: 0, onset: 0 };
 }
 
-function abortError(): Error {
+export function abortError(): Error {
   const e = new Error("analysis aborted");
   e.name = "AbortError";
   return e;
@@ -99,25 +100,41 @@ function normalise(db: Float32Array): number {
   return hi;
 }
 
-/**
- * Reduce decoded PCM to per-frame band energies, loudness and onsets.
- * Async only so it can yield; it never awaits anything but the event loop.
- */
-export async function analyzeBuffer(
-  channels: Float32Array[],
-  sampleRate: number,
-  signal?: AbortSignal,
-): Promise<Analysis> {
+/** Average channels into one. Returns the input itself when it is mono. */
+export function mixToMono(channels: Float32Array[]): Float32Array {
+  if (channels.length === 1) return channels[0];
   const len = channels[0]?.length ?? 0;
-  let mono: Float32Array;
-  if (channels.length === 1) {
-    mono = channels[0];
-  } else {
-    mono = new Float32Array(len);
-    const k = 1 / channels.length;
-    for (const ch of channels) for (let i = 0; i < len; i++) mono[i] += ch[i] * k;
-  }
+  const mono = new Float32Array(len);
+  const k = 1 / channels.length;
+  for (const ch of channels) for (let i = 0; i < len; i++) mono[i] += ch[i] * k;
+  return mono;
+}
 
+export interface AnalyzeOptions {
+  signal?: AbortSignal;
+  /**
+   * Main-thread mode: work at most this many milliseconds before yielding
+   * to the event loop. Omitted or 0 means never yield — right for a
+   * worker, where nothing else is waiting on the thread.
+   *
+   * A time budget, not a frame count. The first version yielded every 240
+   * frames, which is ~35ms in Chrome on a desktop and several times that on
+   * the Pi — so while a track was being analysed the wave dropped to a
+   * handful of frames a second, on every track change.
+   */
+  sliceMs?: number;
+}
+
+/**
+ * Reduce decoded mono PCM to per-frame band energies, loudness and onsets.
+ */
+export async function analyzeMono(
+  mono: Float32Array,
+  sampleRate: number,
+  opts: AnalyzeOptions = {},
+): Promise<Analysis> {
+  const { signal, sliceMs = 0 } = opts;
+  const len = mono.length;
   const hop = sampleRate / FPS;
   const frames = Math.max(0, Math.floor(len / hop));
   const bins = bandBins(sampleRate);
@@ -130,11 +147,17 @@ export async function analyzeBuffer(
   const bandDb = Array.from({ length: BANDS }, () => new Float32Array(frames));
   const levelDb = new Float32Array(frames);
 
+  let sliceStart = performance.now();
   for (let f = 0; f < frames; f++) {
-    if (f % FRAMES_PER_SLICE === 0 && f > 0) {
-      await nextTick();
+    if ((f & 15) === 0) {
       if (signal?.aborted) throw abortError();
+      if (sliceMs > 0 && performance.now() - sliceStart > sliceMs) {
+        await nextTick();
+        if (signal?.aborted) throw abortError();
+        sliceStart = performance.now();
+      }
     }
+    // Centred on the frame, so frame f describes the sound at f / FPS.
     const start = Math.round(f * hop + hop / 2 - FFT_SIZE / 2);
     let sq = 0;
     for (let i = 0; i < FFT_SIZE; i++) {
@@ -199,6 +222,15 @@ export async function analyzeBuffer(
   return { fps: FPS, frames, bands, level: levelDb, onset };
 }
 
+/** `analyzeMono` over one or more channels. */
+export function analyzeBuffer(
+  channels: Float32Array[],
+  sampleRate: number,
+  opts: AnalyzeOptions = {},
+): Promise<Analysis> {
+  return analyzeMono(mixToMono(channels), sampleRate, opts);
+}
+
 /**
  * The analysis at time `t` seconds, linearly interpolated, written into
  * `out`. Outside the track it reads as silence rather than holding the
@@ -223,44 +255,4 @@ export function sampleAt(a: Analysis, t: number, out: AnalysisFrame): AnalysisFr
   // between frames. Take the larger neighbour instead.
   out.onset = Math.max(a.onset[i], w > 0.5 ? a.onset[j] : 0);
   return out;
-}
-
-/** An OfflineAudioContext at the lowest rate the engine accepts — decoding
- *  resamples to it, which is what keeps a four-minute track at ~20MB of PCM
- *  instead of ~85MB. */
-function makeDecoder(): BaseAudioContext {
-  for (const rate of [11025, 22050, 44100]) {
-    try {
-      return new OfflineAudioContext(1, 1, rate);
-    } catch {
-      /* rate unsupported by this engine — try the next */
-    }
-  }
-  throw new Error("no OfflineAudioContext");
-}
-
-/** Decode an encoded file and analyse it. */
-export async function analyzeEncoded(data: ArrayBuffer, signal?: AbortSignal): Promise<Analysis> {
-  const ctx = makeDecoder();
-  const audio = await ctx.decodeAudioData(data);
-  if (signal?.aborted) throw abortError();
-  const channels: Float32Array[] = [];
-  for (let c = 0; c < Math.min(2, audio.numberOfChannels); c++) channels.push(audio.getChannelData(c));
-  return analyzeBuffer(channels, audio.sampleRate, signal);
-}
-
-export const MAX_ANALYSIS_BYTES = 60 * 1024 * 1024;
-export const MAX_ANALYSIS_SECONDS = 15 * 60;
-
-/** Fetch a track from the local stream server and analyse it. Throws on
- *  anything too big to be worth decoding — the caller falls back to the
- *  procedural wave. */
-export async function fetchAndAnalyze(url: string, signal?: AbortSignal): Promise<Analysis> {
-  const res = await fetch(url, { signal });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const declared = Number(res.headers.get("content-length") ?? 0);
-  if (declared > MAX_ANALYSIS_BYTES) throw new Error(`too large (${declared} bytes)`);
-  const data = await res.arrayBuffer();
-  if (data.byteLength > MAX_ANALYSIS_BYTES) throw new Error(`too large (${data.byteLength} bytes)`);
-  return analyzeEncoded(data, signal);
 }
