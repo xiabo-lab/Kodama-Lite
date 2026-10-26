@@ -1,7 +1,13 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "@/App";
+import { hideNativeCursor } from "@/lib/cursor";
 import "@/index.css";
+
+// Native counterpart to the transparent CSS cursor. The Rust setup does
+// this before showing the Pi window; repeating it from the loaded webview
+// also covers a compositor/window recreation after startup.
+void hideNativeCursor();
 
 // Debug-only store exposure, gated behind an explicit query param so it
 // never ships as a normal-user affordance. Verification tool for manual/

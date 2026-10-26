@@ -152,11 +152,16 @@
    * the first application frame. `!important` is deliberate: buttons,
    * sliders and the carousel's temporary inline `grabbing` cursor must not
    * bring it back. Touch feedback is visual; this panel does not need a
-   * desktop pointer anywhere in the app.
+   * desktop pointer anywhere in the app. Use an actual transparent cursor
+   * image before falling back to `none`: WebKitGTK sometimes accepts the
+   * `none` style without replacing the compositor's already-painted boot
+   * cursor. Installing a real (but invisible) cursor image forces that
+   * replacement even on those builds.
    */
   html,
   html * {
-    cursor: none !important;
+    cursor: url("data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7") 0 0,
+      none !important;
   }
 
   /* Nothing in this app is text you select — it's a car dashboard driven

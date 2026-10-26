@@ -52,6 +52,10 @@ pub fn run() {
             // switching to the app, not like nothing happened.
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
+                // Re-assert the kiosk cursor policy before raising the
+                // window. Some compositors recreate their cursor surface
+                // when a window is restored or focused.
+                let _ = window.set_cursor_visible(false);
                 let _ = window.show();
                 let _ = window.set_focus();
             }
@@ -59,6 +63,19 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .setup(|app| {
+            // Keep the GTK/winit window hidden until its compositor-level
+            // cursor is disabled. CSS `cursor: none` only controls the
+            // WebKit page cursor and, on the Pi, the compositor can leave
+            // its boot pointer parked above that page until the first real
+            // touch. This native flag makes that cursor surface invisible
+            // even when a USB device is classified as pointer-capable.
+            if let Some(window) = app.get_webview_window("main") {
+                if let Err(error) = window.set_cursor_visible(false) {
+                    eprintln!("failed to hide the native cursor: {error}");
+                }
+                window.show()?;
+            }
+
             // Before playback: the stream server's `/local/:id` route and
             // `stream:resolve` both look this index up, so it has to exist
             // by the time either can be reached.

@@ -4,6 +4,7 @@ import { idleRemainingMs, screenSaverEligible } from "@/lib/screensaver/idle";
 import { analyzeTrack, MAX_ANALYSIS_SECONDS, workerStatus } from "@/lib/screensaver/pipeline";
 import { startWaveLoop } from "@/lib/screensaver/renderer";
 import { logLine } from "@/lib/log";
+import { hideNativeCursor } from "@/lib/cursor";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/store/appStore";
 import { useKaraokeStore } from "@/store/karaokeStore";
@@ -125,6 +126,10 @@ function ScreenSaver({ onWake }: { onWake: () => void }) {
 
   useEffect(() => {
     logLine(LOG, "on");
+    // Re-assert at the exact transition the user cares about. Fullscreen
+    // changes, focus changes, or a newly enumerated USB pointer can cause
+    // some Linux compositors to recreate their cursor surface.
+    void hideNativeCursor();
     // Next frame, so the opacity transition has a start to run from.
     const id = requestAnimationFrame(() => setShown(true));
     const onKey = () => wakeRef.current();
