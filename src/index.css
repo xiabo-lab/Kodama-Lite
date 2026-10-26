@@ -144,6 +144,21 @@
     margin: 0;
   }
 
+  /*
+   * The Pi boots this app without a mouse ever moving. WebKit therefore
+   * leaves the pointer parked at its boot position, and adding `cursor-none`
+   * only when the screen saver mounts does not force the native cursor to be
+   * recomputed until the first real touch. Hide it for the whole kiosk from
+   * the first application frame. `!important` is deliberate: buttons,
+   * sliders and the carousel's temporary inline `grabbing` cursor must not
+   * bring it back. Touch feedback is visual; this panel does not need a
+   * desktop pointer anywhere in the app.
+   */
+  html,
+  html * {
+    cursor: none !important;
+  }
+
   /* Nothing in this app is text you select — it's a car dashboard driven
      by a fingertip. Leaving selection on meant every attempt to drag the
      page highlighted a track title instead, which is the single thing

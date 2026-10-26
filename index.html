@@ -1,11 +1,17 @@
 <!doctype html>
-<html lang="en" class="dark">
+<!--
+  This is a touch-only car appliance. Hide the native pointer in the very
+  first parsed element, before CSS, WebKit or React has had a frame to paint
+  it. CSS repeats the rule for descendants because controls can otherwise
+  replace an inherited `none` cursor with `pointer`, `text` or `grab`.
+-->
+<html lang="en" class="dark" style="cursor: none">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Kodama-Lite</title>
   </head>
-  <body>
+  <body style="cursor: none">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

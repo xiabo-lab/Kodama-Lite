@@ -92,7 +92,7 @@ function pickCategoryIcon(title: string): LucideIcon {
 }
 
 const CARD_CLASS =
-  "group flex w-full flex-col gap-2 rounded-lg p-2 text-left transition-colors short:gap-1 short:p-1.5 hover:bg-accent/60 focus-visible:bg-accent focus-visible:outline-none";
+  "group relative -m-1 flex w-[calc(100%+0.5rem)] touch-manipulation flex-col gap-2 rounded-lg p-2 text-left transition-colors short:gap-1 hover:bg-accent/60 focus-visible:bg-accent focus-visible:outline-none";
 
 export function ShelfCard({ item, className }: Props) {
   const subtitle = item.subtitle ?? item.artists?.map((a) => a.name).join(", ") ?? item.album ?? "";
@@ -194,7 +194,12 @@ export function ShelfItemActivator({
 
   if (item.kind === "artist") {
     return (
-      <button type="button" onClick={() => navigate({ kind: "artist", id: item.id })} className={className}>
+      <button
+        type="button"
+        data-shelf-card
+        onClick={() => navigate({ kind: "artist", id: item.id })}
+        className={className}
+      >
         {children}
       </button>
     );
@@ -202,7 +207,12 @@ export function ShelfItemActivator({
 
   if (item.kind === "album") {
     return (
-      <button type="button" onClick={() => navigate({ kind: "album", id: item.id })} className={className}>
+      <button
+        type="button"
+        data-shelf-card
+        onClick={() => navigate({ kind: "album", id: item.id })}
+        className={className}
+      >
         {children}
       </button>
     );
@@ -214,6 +224,7 @@ export function ShelfItemActivator({
       return (
         <button
           type="button"
+          data-shelf-card
           className={className}
           onClick={() => usePlaybackStore.getState().playNow(shelfItemToTrack(asSong))}
         >
@@ -222,7 +233,12 @@ export function ShelfItemActivator({
       );
     }
     return (
-      <button type="button" onClick={() => navigate({ kind: "playlist", id: item.id })} className={className}>
+      <button
+        type="button"
+        data-shelf-card
+        onClick={() => navigate({ kind: "playlist", id: item.id })}
+        className={className}
+      >
         {children}
       </button>
     );
@@ -231,6 +247,7 @@ export function ShelfItemActivator({
   return (
     <button
       type="button"
+      data-shelf-card
       className={className}
       onClick={() => usePlaybackStore.getState().playNow(shelfItemToTrack(item))}
     >

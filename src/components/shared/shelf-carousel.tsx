@@ -10,6 +10,19 @@ type Props = {
   action?: ReactNode;
 };
 
+/**
+ * How far a press may wander before it becomes carousel panning instead of
+ * activating the card under it.
+ *
+ * Five pixels is right for a mouse and was wrong for a fingertip on the car
+ * panel: ordinary hand movement cancelled most intended cover/title taps.
+ * Touch and pen get 18 CSS px (about 2% of the panel's physical height),
+ * still small enough that a deliberate horizontal swipe starts promptly.
+ */
+export function carouselDragThreshold(pointerType: string): number {
+  return pointerType === "mouse" ? 5 : 18;
+}
+
 export function ShelfCarousel({ shelf, action }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -42,6 +55,7 @@ export function ShelfCarousel({ shelf, action }: Props) {
     let startX = 0;
     let startScrollLeft = 0;
     let pointerId = 0;
+    let dragThreshold = 5;
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
@@ -50,11 +64,12 @@ export function ShelfCarousel({ shelf, action }: Props) {
       startX = e.clientX;
       startScrollLeft = el.scrollLeft;
       pointerId = e.pointerId;
+      dragThreshold = carouselDragThreshold(e.pointerType);
     };
     const onPointerMove = (e: PointerEvent) => {
       if (!isDown) return;
       const dx = e.clientX - startX;
-      if (!dragging && Math.abs(dx) > 5) {
+      if (!dragging && Math.abs(dx) > dragThreshold) {
         dragging = true;
         try {
           el.setPointerCapture(pointerId);
@@ -124,7 +139,7 @@ export function ShelfCarousel({ shelf, action }: Props) {
 
       <div
         ref={scrollRef}
-        className="shelf-scroll shelf-edge-fade flex min-w-0 gap-2 overflow-x-auto overflow-y-hidden pb-3"
+        className="shelf-scroll shelf-edge-fade flex min-w-0 gap-4 overflow-x-auto overflow-y-hidden px-1 pb-3 pt-1"
       >
         {shelf.items.map((item) => {
           const isVideo = item.kind === "video";
