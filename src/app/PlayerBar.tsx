@@ -93,6 +93,7 @@ export function PlayerBar() {
   const playing = usePlaybackStore((s) => s.playing);
   const status = usePlaybackStore((s) => s.status);
   const started = usePlaybackStore((s) => s.started);
+  const waitingForNext = usePlaybackStore((s) => s.waitingForNext);
   const shuffle = usePlaybackStore((s) => s.shuffle);
   const repeat = usePlaybackStore((s) => s.repeat);
   const position = usePlaybackStore((s) => s.position);
@@ -179,7 +180,7 @@ export function PlayerBar() {
             {loading ? (
               <span className="flex items-center gap-1.5 truncate text-sm text-brand">
                 <Loader2Icon className="size-4 shrink-0 animate-spin" />
-                Loading…
+                {waitingForNext ? "Finding a similar song…" : "Loading…"}
               </span>
             ) : error ? (
               // The real reason, not "Couldn't play this track".

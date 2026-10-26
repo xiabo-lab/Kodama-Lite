@@ -310,18 +310,31 @@ export function useAudioEngine(): void {
   const autoRadio = useSettingsStore((s) => s.autoRadio);
   const queueLen = usePlaybackStore((s) => s.queue.length);
   const queueIndex = usePlaybackStore((s) => s.index);
+  const waitingForNext = usePlaybackStore((s) => s.waitingForNext);
   const seedVideoId = usePlaybackStore((s) =>
     s.index >= 0 ? s.queue[s.index]?.videoId : undefined,
   );
   useEffect(() => {
-    if (!autoRadio) return;
     if (queueIndex < 0 || !seedVideoId) return;
     // Only when the current track is the last one queued.
     if (queueIndex < queueLen - 1) return;
+    if (!autoRadio) {
+      // Preserve the Settings switch. `next()` cannot import the settings
+      // store without coupling queue mechanics to preferences, so it
+      // enters the neutral waiting state first and this owner resolves it.
+      if (waitingForNext) {
+        usePlaybackStore.setState({
+          waitingForNext: false,
+          playing: false,
+          status: "ready",
+        });
+      }
+      return;
+    }
     // Dedupe lives in the store, not a ref here, so a failed station can
     // be retried — see `radioStore.request`.
-    useRadioStore.getState().request(seedVideoId);
-  }, [autoRadio, queueIndex, queueLen, seedVideoId]);
+    useRadioStore.getState().request(seedVideoId, waitingForNext);
+  }, [autoRadio, queueIndex, queueLen, seedVideoId, waitingForNext]);
 
   // The element itself: created once, torn down on unmount.
   useEffect(() => {

@@ -32,6 +32,7 @@ beforeEach(() => {
     duration: 0,
     shuffle: false,
     repeat: "off",
+    waitingForNext: false,
     error: undefined,
   });
 });
@@ -53,12 +54,25 @@ describe("playQueue / next / prev", () => {
     expect(usePlaybackStore.getState().index).toBe(1);
   });
 
-  it("next() at the end of the queue stops (repeat off)", () => {
+  it("next() at the end waits for radio instead of stopping on the old song", () => {
     usePlaybackStore.getState().playQueue([track("a"), track("b")], 1);
     usePlaybackStore.getState().next();
     const s = usePlaybackStore.getState();
     expect(s.index).toBe(1); // unchanged
+    expect(s.playing).toBe(true); // intent survives while radio loads
+    expect(s.waitingForNext).toBe(true);
+    expect(s.status).toBe("loading");
+    expect(s.started).toBe(false);
+  });
+
+  it("Pause cancels an end-of-queue wait", () => {
+    usePlaybackStore.getState().playQueue([track("a")], 0);
+    usePlaybackStore.getState().next();
+    usePlaybackStore.getState().toggle();
+    const s = usePlaybackStore.getState();
     expect(s.playing).toBe(false);
+    expect(s.waitingForNext).toBe(false);
+    expect(s.status).toBe("ready");
   });
 
   it("next() at the end loops to 0 when repeat is 'all'", () => {

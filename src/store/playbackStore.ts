@@ -75,6 +75,14 @@ interface PlaybackState {
   muted: boolean;
   shuffle: boolean;
   repeat: RepeatMode;
+  /**
+   * The user (or the audio element's `ended` event) asked to advance while
+   * the current track was the final queued item. Autoplay radio is still
+   * fetching the continuation. Keep `playing` true as the user's intent,
+   * but do not replay the ended element; `radioStore` appends the result
+   * and calls `next()` again.
+   */
+  waitingForNext: boolean;
   error?: string;
   /** What to blame for `error`. Paired with it — set and cleared
    *  together — so a stale cause can never outlive its message. Absent
@@ -265,6 +273,7 @@ function loadTrackAt(
     streamUrl: undefined,
     error: undefined,
     errorCause: undefined,
+    waitingForNext: false,
   });
   saveQueueCache(queue, index);
   requestStream(track.videoId);
@@ -290,6 +299,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
     muted: savedVolume.muted,
     shuffle: false,
     repeat: "off",
+    waitingForNext: false,
     ytdlpPhase: "downloading",
 
     playNow: (track) => loadTrackAt(set, [track], 0),
@@ -346,9 +356,17 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
     // `playing: true` against a `<audio>` element with no src — which is
     // what the play button did after a relaunch.
     toggle: () => {
-      const { index, playing } = get();
+      const { index, playing, waitingForNext } = get();
       if (index < 0) return set({ playing: false });
-      if (playing) return set({ playing: false });
+      if (playing) {
+        // Pause is also how the user says "stop trying to continue" while
+        // radio is filling an exhausted queue.
+        return set({
+          playing: false,
+          waitingForNext: false,
+          status: waitingForNext ? "ready" : get().status,
+        });
+      }
       get().resume();
     },
 
@@ -390,13 +408,30 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
       const { queue, index, repeat } = get();
       if (queue.length === 0) return;
       if (repeat === "one") {
-        set({ position: 0, positionEpoch: bumpEpoch(), playing: true });
+        set({
+          position: 0,
+          positionEpoch: bumpEpoch(),
+          playing: true,
+          waitingForNext: false,
+        });
         return;
       }
       let nextIndex = index + 1;
       if (nextIndex >= queue.length) {
         if (repeat !== "all") {
-          set({ playing: false });
+          // Do not stop on the old song. `useAudioEngine` turns this into
+          // an urgent radio request; when it lands, radioStore appends and
+          // calls this action again. `started: false` keeps MPRIS/Tesla's
+          // clock paused instead of letting it run beyond the song while
+          // the continuation is loading.
+          set({
+            playing: true,
+            waitingForNext: true,
+            status: "loading",
+            started: false,
+            error: undefined,
+            errorCause: undefined,
+          });
           return;
         }
         nextIndex = 0;
@@ -409,19 +444,29 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
     },
 
     prev: () => {
-      const { queue, index, position } = get();
+      const { queue, index, position, waitingForNext } = get();
       if (queue.length === 0) return;
       // >3s in, or already first: restart the current track rather than
       // actually going back — matches YTMLite.
       if (index <= 0 || position > 3) {
-        set({ position: 0, positionEpoch: bumpEpoch() });
+        set({
+          position: 0,
+          positionEpoch: bumpEpoch(),
+          playing: waitingForNext ? true : get().playing,
+          waitingForNext: false,
+          status: waitingForNext ? "ready" : get().status,
+        });
         return;
       }
       loadTrackAt(set, queue, index - 1);
     },
 
     seek: (seconds) =>
-      set({ position: Math.max(0, seconds), positionEpoch: bumpEpoch() }),
+      set({
+        position: Math.max(0, seconds),
+        positionEpoch: bumpEpoch(),
+        waitingForNext: false,
+      }),
 
     setVolume: (v) => {
       const volume = Math.max(0, Math.min(1, v));
@@ -458,6 +503,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => {
       set((s) => ({
         status: "error",
         playing: false,
+        waitingForNext: false,
         error: s.error ?? message,
         // No cause: this is the element's generic MEDIA_ERR, which knows
         // only that decoding failed. Leaving it undefined rather than
